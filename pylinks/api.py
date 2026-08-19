@@ -63,6 +63,8 @@ class Api:
         # ostatni wynik skanu PC (pełne wpisy z `content`) — do dalszych
         # operacji (ikony, eksport). Frontend dostaje odchudzoną wersję.
         self._pc_games: list[dict] = []
+        # cache upieczonych miniatur w RAM: (key,mode,fit,offset) → data-URI
+        self._baked: dict = {}
 
     # --- diagnostyka mostu ---
     def ping(self, msg: str = "") -> dict:
@@ -169,14 +171,41 @@ class Api:
         return None
 
     # --- grafiki: dwa tryby "icon" (kwadrat) / "steam" (portret) ---
+    def _raw_uri(self, key: str, mode: str):
+        """Surowy obraz jako data-URI z cache RAM (albo z dysku). Kształt robi
+        CSS (object-fit/position), więc NIE pieczemy PIL do wyświetlania."""
+        ck = (key, mode)
+        if ck in self._baked:
+            return self._baked[ck]
+        uri = art.raw_cover(CACHE_DIR, key, mode)
+        if uri:
+            self._baked[ck] = uri
+        return uri
+
+    def _invalidate(self, key: str) -> None:
+        for ck in [k for k in self._baked if k[0] == key]:
+            self._baked.pop(ck, None)
+
     def cover_cached(self, key: str, mode: str = "icon") -> dict:
-        """Szybki odczyt grafiki z cache dyskowego danego trybu (bez sieci).
-        Zwraca PRZETWORZONĄ miniaturę (kwadrat/portret) — kształt upieczony w PIL.
-        Uwzględnia per-grę kadr (config.icon_crop_by_key)."""
+        """Surowy obraz z cache + per-grę kadr (fit/offset dla CSS)."""
         cfg = _load_config()
+        uri = self._raw_uri(key, mode)
         fit, off = self._crop_for(key, cfg)
-        uri = art.cached_cover(CACHE_DIR, key, mode, fit, off)
-        return {"key": key, "found": bool(uri), "data_uri": uri, "cached": True}
+        return {"key": key, "found": bool(uri), "data_uri": uri,
+                "fit": fit, "offset": off, "cached": True}
+
+    def covers_batch(self, keys: list, mode: str = "icon") -> dict:
+        """ZBIORCZO w JEDNYM wywołaniu mostu: {key: {uri, fit, offset}}."""
+        cfg = _load_config()
+        out = {}
+        for k in keys:
+            uri = self._raw_uri(k, mode)
+            if not uri:
+                out[k] = None
+                continue
+            fit, off = self._crop_for(k, cfg)
+            out[k] = {"uri": uri, "fit": fit, "offset": off}
+        return out
 
     @staticmethod
     def _crop_for(key: str, cfg: dict):
@@ -197,23 +226,20 @@ class Api:
                 "fit": fit, "offset": off}
 
     def crop_apply(self, key: str, fit: str, offset, mode: str = "icon") -> dict:
-        """Zapisuje per-grę kadr i zwraca przepieczoną miniaturę."""
+        """Zapisuje per-grę kadr; kształt renderuje CSS (zwraca fit/offset)."""
         fit = "crop" if str(fit).lower() == "crop" else "pad"
         try:
             offset = max(0.0, min(1.0, float(offset)))
         except Exception:
             offset = 0.5
         self._save_crop(key, {"fit": fit, "offset": offset})
-        uri = art.cached_cover(CACHE_DIR, key, mode, fit, offset)
-        return {"key": key, "found": bool(uri), "data_uri": uri}
+        return {"key": key, "ok": True, "fit": fit, "offset": offset}
 
     def crop_reset(self, key: str, mode: str = "icon") -> dict:
         """Usuwa per-grę kadr (wraca do globalnego dopasowania)."""
         self._save_crop(key, None)
-        cfg = _load_config()
-        fit, off = self._crop_for(key, cfg)
-        uri = art.cached_cover(CACHE_DIR, key, mode, fit, off)
-        return {"key": key, "found": bool(uri), "data_uri": uri}
+        fit, off = self._crop_for(key, _load_config())
+        return {"key": key, "ok": True, "fit": fit, "offset": off}
 
     def _save_crop(self, key: str, entry) -> None:
         try:
@@ -233,12 +259,18 @@ class Api:
             pass
 
     def fetch_cover(self, key: str, mode: str = "icon") -> dict:
-        """Pobiera grafikę z SGDB (lub czyta z cache) dla trybu."""
+        """Pobiera grafikę z SGDB (lub czyta z cache) dla trybu. Kształt robi CSS."""
         g = self._find_game(key)
         if not g:
             return {"key": key, "found": False, "data_uri": None,
                     "reason": "nieznana gra (najpierw skan)"}
-        return art.fetch_cover(_load_config(), CACHE_DIR, key, g, mode)
+        cfg = _load_config()
+        res = art.fetch_cover(cfg, CACHE_DIR, key, g, mode)
+        if res.get("found"):
+            self._invalidate(key)               # świeżo pobrany raw
+            fit, off = self._crop_for(key, cfg)
+            res["fit"], res["offset"] = fit, off
+        return res
 
     def cover_candidates(self, key: str, query: str = "", mode: str = "icon") -> dict:
         """Lista kandydatów do okna wyboru (miniatury jako data-URI) dla trybu.
@@ -275,17 +307,28 @@ class Api:
         res = art.save_chosen_cover(CACHE_DIR, key, url, mode)
         if res.get("found"):
             self._save_selection(key, url, mode)
+            self._invalidate(key)
+            fit, off = self._crop_for(key, _load_config())
+            res["fit"], res["offset"] = fit, off
         return {"key": key, "found": res.get("found", False),
-                "data_uri": res.get("data_uri")}
+                "data_uri": res.get("data_uri"),
+                "fit": res.get("fit"), "offset": res.get("offset")}
 
     def reset_cover(self, key: str, mode: str = "icon") -> dict:
         """Przywraca automatyczną grafikę trybu: usuwa wybór + pobiera na nowo."""
         art.clear_cover(CACHE_DIR, key, mode)
         self._save_selection(key, None, mode)
+        self._invalidate(key)
         g = self._find_game(key)
         if not g:
             return {"key": key, "found": False, "data_uri": None}
-        return art.fetch_cover(_load_config(), CACHE_DIR, key, g, mode)
+        cfg = _load_config()
+        res = art.fetch_cover(cfg, CACHE_DIR, key, g, mode)
+        if res.get("found"):
+            self._invalidate(key)
+            fit, off = self._crop_for(key, cfg)
+            res["fit"], res["offset"] = fit, off
+        return res
 
     # --- tryb Steam: kilka typów grafik (grid + hero/tło + logo) ---
     def steam_art_options(self, key: str, query: str = "") -> dict:

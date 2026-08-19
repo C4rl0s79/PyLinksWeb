@@ -152,7 +152,22 @@ function card(name, sub, src, game){
   return c;
 }
 
-function setCover(key, dataUri){
+// Kształt robi CSS: pad = contain, crop = cover + object-position (offset).
+function styleCover(img, fit, offset){
+  if (MODE === "steam"){   // portret Steam zawsze wypełnia ramkę
+    img.style.objectFit = "cover"; img.style.objectPosition = "center"; return;
+  }
+  if (fit === "crop"){
+    img.style.objectFit = "cover";
+    const p = Math.round((offset == null ? 0.5 : offset) * 100);
+    img.style.objectPosition = p + "% " + p + "%";
+  } else {
+    img.style.objectFit = "contain";
+    img.style.objectPosition = "center";
+  }
+}
+
+function setCover(key, dataUri, fit, offset){
   const c = document.querySelector(`.card[data-key="${cssEsc(key)}"] .thumb`);
   if (!c) return;
   c.classList.remove("loading");
@@ -160,8 +175,13 @@ function setCover(key, dataUri){
   const old = c.querySelector("img"); if (old) old.remove();
   const ph = c.querySelector(".ph"); if (ph) ph.style.display = "none";  // schowaj 🎮 pod okładką
   const img = document.createElement("img");
-  img.alt = ""; img.src = dataUri;
+  img.alt = ""; styleCover(img, fit, offset); img.src = dataUri;
   c.insertBefore(img, ph);
+}
+
+function restyleCover(key, fit, offset){
+  const img = document.querySelector(`.card[data-key="${cssEsc(key)}"] .thumb img`);
+  if (img) styleCover(img, fit, offset);
 }
 const cssEsc = (s) => (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/"/g,'\\"');
 
@@ -169,16 +189,19 @@ const cssEsc = (s) => (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/"/
 // Token LOAD_TOK anuluje ładowanie, gdy widok się zmieni (filtr/źródło/skan).
 async function loadCovers(games){
   const tok = ++LOAD_TOK;
+  const keys = games.map(g => g.key).filter(Boolean);
   const missing = [];
-  for (const g of games){
-    if (!g.key) continue;
-    try{
-      const r = await api("cover_cached", g.key, MODE);
-      if (tok !== LOAD_TOK) return;
-      if (r.found) setCover(g.key, r.data_uri);
-      else missing.push(g);
-    }catch(e){ /* brak mostu / błąd — pomiń */ }
-  }
+  // 1) JEDNO zbiorcze wywołanie mostu dla całego cache (zamiast N round-tripów)
+  try{
+    const batch = await api("covers_batch", keys, MODE);
+    if (tok !== LOAD_TOK) return;
+    for (const g of games){
+      const r = g.key && batch[g.key];
+      if (r) setCover(g.key, r.uri, r.fit, r.offset);
+      else if (g.key) missing.push(g);
+    }
+  }catch(e){ return; }
+  // 2) sieć tylko dla brakujących (sekwencyjnie)
   for (const g of missing){
     if (tok !== LOAD_TOK) return;
     const c = document.querySelector(`.card[data-key="${cssEsc(g.key)}"] .thumb`);
@@ -186,7 +209,7 @@ async function loadCovers(games){
     try{
       const r = await api("fetch_cover", g.key, MODE);
       if (tok !== LOAD_TOK) return;
-      setCover(g.key, r.found ? r.data_uri : null);
+      setCover(g.key, r.found ? r.data_uri : null, r.fit, r.offset);
     }catch(e){ if (c) c.classList.remove("loading"); }
   }
 }
@@ -214,7 +237,7 @@ async function resetCover(game){
   if (thumb){ thumb.classList.add("loading"); const im=thumb.querySelector("img"); if(im) im.remove(); }
   try{
     const r = await api("reset_cover", key, MODE);
-    setCover(key, r.found ? r.data_uri : null);
+    setCover(key, r.found ? r.data_uri : null, r.fit, r.offset);
   }catch(e){ if (thumb) thumb.classList.remove("loading"); }
 }
 
@@ -276,13 +299,13 @@ el("cropModal").addEventListener("click", (e) => { if (e.target === el("cropModa
 el("cropSave").onclick = async () => {
   if (!CROP_GAME) return;
   const r = await api("crop_apply", CROP_GAME.key, cropFit(), +el("cropOffset").value, MODE);
-  if (r.found) setCover(CROP_GAME.key, r.data_uri);
+  restyleCover(CROP_GAME.key, r.fit, r.offset);   // kształt robi CSS — bez ponownego pobierania
   closeCrop();
 };
 el("cropResetBtn").onclick = async () => {
   if (!CROP_GAME) return;
   const r = await api("crop_reset", CROP_GAME.key, MODE);
-  if (r.found) setCover(CROP_GAME.key, r.data_uri);
+  restyleCover(CROP_GAME.key, r.fit, r.offset);
   closeCrop();
 };
 document.addEventListener("click", () => hideCtx());
@@ -440,16 +463,7 @@ async function chooseCover(url){
   try{
     const r = await api("choose_cover", key, url, MODE);
     if (r.found){
-      // podmień okładkę w karcie i zamknij
-      const thumb = document.querySelector(`.card[data-key="${cssEsc(key)}"] .thumb`);
-      if (thumb){
-        thumb.classList.remove("loading");
-        const old = thumb.querySelector("img");
-        if (old) old.remove();
-        const img = document.createElement("img");
-        img.src = r.data_uri;
-        thumb.insertBefore(img, thumb.querySelector(".ph"));
-      }
+      setCover(key, r.data_uri, r.fit, r.offset);   // kształt przez CSS
       closePicker();
     }else{
       box.innerHTML = `<div class="pk-empty">Nie udało się pobrać okładki.</div>`;

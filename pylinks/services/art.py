@@ -294,8 +294,7 @@ def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict,
     steam → PORTRET (grid 600x900 → kwadrat jako ostateczność)
     """
     mode = _mode(mode)
-    fit = cfg.get("icon_fit_mode", "pad")
-    hit = cached_cover(cache_dir, key, mode, fit)
+    hit = raw_cover(cache_dir, key, mode)     # kształt robi CSS — zwracamy surowy
     if hit:
         return {"key": key, "found": True, "data_uri": hit, "cached": True}
 
@@ -334,12 +333,11 @@ def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict,
             continue
         try:
             out = _covers_dir(cache_dir, mode) / (_safe_key(key) + _ext(_mime(data)))
-            out.write_bytes(data)     # zapisujemy SUROWY obraz (do re-bake przy zmianie fit)
+            out.write_bytes(data)     # zapisujemy SUROWY obraz; kształt robi CSS
         except Exception:
             pass
         return {"key": key, "found": True,
-                "data_uri": _to_data_uri(make_display_thumb(data, mode, fit)),
-                "cached": False}
+                "data_uri": _to_data_uri(data), "cached": False}
 
     return {"key": key, "found": False, "data_uri": None, "cached": False}
 
