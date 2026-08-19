@@ -24,13 +24,16 @@
   <div class="layout">
     <aside class="sidebar">
       <div class="side-group">
-        <div class="side-title">Źródła</div>
-        <button class="side-item" data-plat="" >Wszystkie</button>
-        <button class="side-item" data-plat="PC">PC (Steam/GOG/Epic/Extra)</button>
+        <div class="side-title">Źródła PC <span id="pcTotal" class="muted"></span></div>
+        <button class="side-item src active" data-src="">Wszystkie<span class="count" data-c="all">0</span></button>
+        <button class="side-item src" data-src="steam">Steam<span class="count" data-c="steam">0</span></button>
+        <button class="side-item src" data-src="gog">GOG<span class="count" data-c="gog">0</span></button>
+        <button class="side-item src" data-src="epic">Epic<span class="count" data-c="epic">0</span></button>
+        <button class="side-item src" data-src="extra">Extra<span class="count" data-c="extra">0</span></button>
       </div>
       <div class="side-group">
-        <div class="side-title">Platformy <span id="platCount" class="muted"></span></div>
-        <div id="platforms" class="platforms"><div class="muted pad">ładowanie…</div></div>
+        <div class="side-title">Skróty LINKS <span id="platCount" class="muted"></span></div>
+        <div id="platforms" class="platforms"><div class="muted pad">—</div></div>
       </div>
     </aside>
 
@@ -38,13 +41,13 @@
       <div class="content-head">
         <h1 id="gridTitle">Witaj w nowej wersji PyLinks</h1>
         <span id="gridSub" class="muted"></span>
+        <input id="filter" class="filter" type="search" placeholder="Filtruj po nazwie…" hidden>
       </div>
       <div id="grid" class="grid">
         <div class="welcome">
-          <p>To szkielet <b>Fazy 0</b> — nowa wersja na <b>pywebview</b> (HTML/CSS/JS)
-             używająca istniejącego silnika <code>pylinks/</code>.</p>
-          <p class="muted">Wybierz platformę po lewej, aby zobaczyć skróty z siatki.
-             Ta lista ładuje się z prawdziwych folderów <code>LINKS/&lt;platforma&gt;</code>.</p>
+          <p>Nowa wersja na <b>pywebview</b> (HTML/CSS/JS) na silniku <code>pylinks/</code>.</p>
+          <p class="muted">Kliknij <b>🔍 Skanuj</b>, aby wykryć gry ze Steam / GOG /
+             Epic / Extra i pokazać je w siatce. Ikony i grafiki dojdą w kolejnym kroku.</p>
         </div>
       </div>
     </main>

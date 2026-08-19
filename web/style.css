@@ -69,8 +69,14 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 
 /* ── Content ── */
 .content{flex:1;min-width:0;display:flex;flex-direction:column;padding:16px 20px}
-.content-head{display:flex;align-items:baseline;gap:12px;margin-bottom:12px}
+.content-head{display:flex;align-items:center;gap:12px;margin-bottom:12px}
 .content-head h1{font-size:20px;margin:0}
+.filter{
+  margin-left:auto; min-width:220px;
+  background:var(--bg2); color:var(--fg); border:1px solid var(--bg3);
+  border-radius:8px; padding:7px 11px; font-size:13px; outline:none;
+}
+.filter:focus{border-color:var(--acc)}
 .grid{
   flex:1; overflow-y:auto;
   display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
@@ -89,9 +95,23 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
   display:flex; align-items:center; justify-content:center;
   color:var(--fg2); font-size:34px;
 }
+.card .thumb{position:relative}
+.card .thumb .src{
+  position:absolute;top:6px;left:6px;font-size:10px;font-weight:700;
+  padding:2px 7px;border-radius:999px;background:var(--bg2);color:var(--fg);
+  text-transform:uppercase;letter-spacing:.4px;
+}
+.src-steam{color:var(--acc)!important} .src-gog{color:var(--ext)!important}
+.src-epic{color:var(--yel)!important}  .src-extra{color:var(--orn)!important}
 .card .cap{padding:8px 10px;font-size:12px;display:flex;flex-direction:column;gap:2px}
 .card .cap .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card .cap .p{color:var(--fg2);font-size:11px}
+
+/* spinner skanu */
+.scanning{grid-column:1/-1;display:flex;align-items:center;gap:12px;color:var(--fg2)}
+.spin{width:18px;height:18px;border:3px solid var(--bg3);border-top-color:var(--acc);
+  border-radius:50%;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
 
 /* ── Statusbar ── */
 .statusbar{

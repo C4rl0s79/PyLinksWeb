@@ -18,6 +18,7 @@ from pylinks.constants import C
 from pylinks.config.defaults import _default_config
 from pylinks.config.migrate import migrate_config
 from pylinks.roms.presets import ROM_SYSTEM_PRESETS
+from pylinks.services import scan_pc
 
 
 def _load_config() -> dict:
@@ -30,8 +31,38 @@ def _load_config() -> dict:
     return _default_config()
 
 
+def _game_key(g: dict) -> str:
+    """Stabilny klucz gry PC (do ikon/wyboru). Nie zależy od pozycji."""
+    src = g.get("source", "pc")
+    if g.get("appid"):
+        return f"{src}::app::{g['appid']}"
+    if g.get("gog_id"):
+        return f"{src}::gog::{g['gog_id']}"
+    if g.get("epic_app_name"):
+        return f"{src}::epic::{g['epic_app_name']}"
+    return f"{src}::name::{(g.get('name') or '').strip().lower()}"
+
+
+def _slim_game(g: dict) -> dict:
+    """Wpis gry dla frontendu — bez ciężkiego pola `content` (ACF)."""
+    return {
+        "key": _game_key(g),
+        "name": g.get("name", ""),
+        "source": g.get("source", ""),
+        "game_dir": g.get("game_dir"),
+        "launch_exe": g.get("launch_exe"),
+        "appid": g.get("appid"),
+        "enabled": g.get("enabled", True),
+    }
+
+
 class Api:
     """Metody dostępne z JS. Zwracają dict/list/str (JSON-serializowalne)."""
+
+    def __init__(self) -> None:
+        # ostatni wynik skanu PC (pełne wpisy z `content`) — do dalszych
+        # operacji (ikony, eksport). Frontend dostaje odchudzoną wersję.
+        self._pc_games: list[dict] = []
 
     # --- diagnostyka mostu ---
     def ping(self, msg: str = "") -> dict:
@@ -96,6 +127,31 @@ class Api:
                 if f.suffix.lower() in (".lnk", ".url"):
                     out.append({"name": f.stem, "platform": d.name})
         return out
+
+    # --- skan bibliotek PC (Steam/GOG/Epic/Extra) ---
+    def scan_pc(self) -> dict:
+        """Uruchamia pełny skan PC i zwraca odchudzone wpisy + liczniki.
+
+        UWAGA: synchronicznie (Steam Web API może chwilę potrwać). Frontend
+        woła to asynchronicznie (Promise) i pokazuje spinner.
+        """
+        cfg = _load_config()
+        res = scan_pc.scan_pc_library(cfg)
+        self._pc_games = res["games"]
+        return {
+            "ok": True,
+            "counts": res["counts"],
+            "total": len(res["games"]),
+            "steam_exe": res.get("steam_exe", ""),
+            "games": [_slim_game(g) for g in res["games"]],
+        }
+
+    def get_pc_games(self, source: str = "") -> list:
+        """Zwraca ostatnio zeskanowane gry PC (opcjonalnie filtr źródła)."""
+        games = self._pc_games
+        if source:
+            games = [g for g in games if g.get("source") == source]
+        return [_slim_game(g) for g in games]
 
     # --- config ---
     def get_config(self) -> dict:
