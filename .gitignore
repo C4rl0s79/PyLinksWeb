@@ -1,0 +1,30 @@
+# PyLinks (web) — ignorowane
+
+# środowiska
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# dane aplikacji (generowane obok programu — NIE do repo)
+config.json
+config.json.bak*
+Cache/
+LINKS/
+Reports/
+*.log
+
+# build / pakowanie
+build/
+dist/
+*.spec
+
+# IDE / OS
+.idea/
+.vscode/
+Thumbs.db
+desktop.ini

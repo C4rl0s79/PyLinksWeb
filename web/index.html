@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PyLinks</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">🔗</span>
+      <span class="name">PyLinks</span>
+      <span class="ver" id="ver">web</span>
+      <span class="badge" id="engineBadge">silnik…</span>
+    </div>
+    <div class="actions">
+      <button class="btn" id="btnScan">🔍 Skanuj</button>
+      <button class="btn ghost" id="btnPing" title="Test mostu Python↔JS">⚡ Test mostu</button>
+      <button class="btn ghost" id="btnSettings">⚙ Ustawienia</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="side-group">
+        <div class="side-title">Źródła</div>
+        <button class="side-item" data-plat="" >Wszystkie</button>
+        <button class="side-item" data-plat="PC">PC (Steam/GOG/Epic/Extra)</button>
+      </div>
+      <div class="side-group">
+        <div class="side-title">Platformy <span id="platCount" class="muted"></span></div>
+        <div id="platforms" class="platforms"><div class="muted pad">ładowanie…</div></div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <div class="content-head">
+        <h1 id="gridTitle">Witaj w nowej wersji PyLinks</h1>
+        <span id="gridSub" class="muted"></span>
+      </div>
+      <div id="grid" class="grid">
+        <div class="welcome">
+          <p>To szkielet <b>Fazy 0</b> — nowa wersja na <b>pywebview</b> (HTML/CSS/JS)
+             używająca istniejącego silnika <code>pylinks/</code>.</p>
+          <p class="muted">Wybierz platformę po lewej, aby zobaczyć skróty z siatki.
+             Ta lista ładuje się z prawdziwych folderów <code>LINKS/&lt;platforma&gt;</code>.</p>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <footer class="statusbar">
+    <span id="statPaths" class="muted">ścieżki…</span>
+    <span id="statBridge" class="pill">most: —</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
