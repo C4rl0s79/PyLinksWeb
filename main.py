@@ -30,7 +30,24 @@ from pylinks import __version__
 _WEB = Path(__file__).resolve().parent / "web" / "index.html"
 
 
+def _single_instance_guard() -> "object | None":
+    """Zapobiega uruchomieniu drugiej instancji (koniec bałaganu ze starymi
+    oknami). Zwraca gniazdo-blokadę (trzymać referencję) albo None gdy już działa."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", 49517))
+        s.listen(1)
+        return s
+    except OSError:
+        return None
+
+
 def main() -> int:
+    lock = _single_instance_guard()
+    if lock is None:
+        print("PyLinks już działa — zamknij poprzednie okno przed nowym startem.")
+        return 0
     api = Api()
     window = webview.create_window(
         title=f"PyLinks {__version__}",
