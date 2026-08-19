@@ -354,67 +354,67 @@ el("ctxMenu").addEventListener("click", (e) => {
   hideCtx();
   if (!g) return;
   if (act === "pick") openPicker(g);
-  else if (act === "crop") openCrop(g);
-  else if (act === "reset") resetCover(g);
+  else if (act === "crop") startCropDrag(g);
+  else if (act === "frame") setCropMode(g, "pad", 0.5);   // Ramki
+  else if (act === "default") cropDefault(g);             // Domyślne
 });
 
-// ── okno kadrowania (pad/crop + pozycja), podgląd po stronie klienta ────────
-let CROP_GAME = null, CROP_IMG = null;
-function openCrop(game){
-  CROP_GAME = game; CROP_IMG = null;
-  el("cropTitle").textContent = "Kadrowanie: " + game.name;
-  el("cropModal").hidden = false;
-  api("crop_get", game.key, MODE).then(r => {
-    document.querySelector(`input[name=cropFit][value="${r.fit==='crop'?'crop':'pad'}"]`).checked = true;
-    el("cropOffset").value = (r.offset != null ? r.offset : 0.5);
-    if (r.raw){
-      const im = new Image();
-      im.onload = () => { CROP_IMG = im; drawCrop(); };
-      im.src = r.raw;
-    } else { drawCrop(); }
-    updateCropOffState();
-  }).catch(()=>{});
+// Ramki / ustawienie fit bez okna
+async function setCropMode(game, fit, offset){
+  try{
+    const r = await api("crop_apply", game.key, fit, offset, MODE);
+    restyleCover(game.key, r.fit, r.offset);
+  }catch(e){}
 }
-function closeCrop(){ el("cropModal").hidden = true; CROP_GAME = null; CROP_IMG = null; }
-function cropFit(){ return document.querySelector("input[name=cropFit]:checked").value; }
-function updateCropOffState(){ el("cropOffRow").classList.toggle("dis", cropFit() !== "crop"); }
-
-function drawCrop(){
-  const cv = el("cropCanvas"), ctx = cv.getContext("2d");
-  ctx.clearRect(0,0,256,256);
-  if (!CROP_IMG) return;
-  const iw = CROP_IMG.naturalWidth, ih = CROP_IMG.naturalHeight;
-  if (cropFit() === "crop"){
-    const off = +el("cropOffset").value;
-    const side = Math.min(iw, ih);
-    let sx, sy;
-    if (ih > iw){ sx = (iw-side)/2; sy = (ih-side)*off; }
-    else { sx = (iw-side)*off; sy = (ih-side)/2; }
-    ctx.drawImage(CROP_IMG, sx, sy, side, side, 0, 0, 256, 256);
-  } else {
-    const s = Math.min(256/iw, 256/ih);
-    const w = iw*s, h = ih*s;
-    ctx.drawImage(CROP_IMG, (256-w)/2, (256-h)/2, w, h);
-  }
+async function cropDefault(game){
+  try{
+    const r = await api("crop_reset", game.key, MODE);
+    restyleCover(game.key, r.fit, r.offset);
+  }catch(e){}
 }
 
-el("cropClose").onclick = closeCrop;
-document.querySelectorAll("input[name=cropFit]").forEach(r =>
-  r.onchange = () => { updateCropOffState(); drawCrop(); });
-el("cropOffset").oninput = drawCrop;
-el("cropModal").addEventListener("click", (e) => { if (e.target === el("cropModal")) closeCrop(); });
-el("cropSave").onclick = async () => {
-  if (!CROP_GAME) return;
-  const r = await api("crop_apply", CROP_GAME.key, cropFit(), +el("cropOffset").value, MODE);
-  restyleCover(CROP_GAME.key, r.fit, r.offset);   // kształt robi CSS — bez ponownego pobierania
-  closeCrop();
-};
-el("cropResetBtn").onclick = async () => {
-  if (!CROP_GAME) return;
-  const r = await api("crop_reset", CROP_GAME.key, MODE);
-  restyleCover(CROP_GAME.key, r.fit, r.offset);
-  closeCrop();
-};
+// ── Kadruj = przeciąganie myszką BEZPOŚREDNIO na obrazku (bez suwaka) ────────
+let CROP_DRAG = null;
+function startCropDrag(game){
+  const thumb = document.querySelector(`.card[data-key="${cssEsc(game.key)}"] .thumb`);
+  const img = thumb && thumb.querySelector("img.cover");
+  if (!img){ return; }
+  img.style.objectFit = "cover";                       // tryb kadru
+  const portrait = img.naturalHeight >= img.naturalWidth;
+  CROP_DRAG = {key: game.key, thumb, img, portrait, offset: 0.5};
+  thumb.classList.add("cropping");
+  thumb.style.cursor = portrait ? "ns-resize" : "ew-resize";
+
+  const move = (e) => {
+    const r = thumb.getBoundingClientRect();
+    let off = CROP_DRAG.portrait ? (e.clientY - r.top) / r.height
+                                 : (e.clientX - r.left) / r.width;
+    off = Math.max(0, Math.min(1, off));
+    CROP_DRAG.offset = off;
+    const p = Math.round(off * 100);
+    img.style.objectPosition = p + "% " + p + "%";
+  };
+  const finish = async (commit) => {
+    thumb.removeEventListener("mousemove", move);
+    thumb.removeEventListener("click", onClick);
+    document.removeEventListener("keydown", onKey);
+    thumb.classList.remove("cropping");
+    thumb.style.cursor = "";
+    if (commit && CROP_DRAG){
+      try{
+        const r = await api("crop_apply", CROP_DRAG.key, "crop", CROP_DRAG.offset, MODE);
+        restyleCover(CROP_DRAG.key, r.fit, r.offset);
+      }catch(e){}
+    }
+    CROP_DRAG = null;
+  };
+  const onClick = (e) => { e.stopPropagation(); finish(true); };   // klik = zatwierdź
+  const onKey = (e) => { if (e.key === "Escape") finish(false); }; // Esc = anuluj
+  thumb.addEventListener("mousemove", move);
+  thumb.addEventListener("click", onClick);
+  document.addEventListener("keydown", onKey);
+}
+
 document.addEventListener("click", () => hideCtx());
 document.addEventListener("scroll", () => hideCtx(), true);
 

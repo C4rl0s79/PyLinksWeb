@@ -128,6 +128,13 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
   font-size:34px;
 }
 .card .thumb.loading .ph{opacity:.5}
+/* tryb Kadruj — przeciąganie bezpośrednio na obrazku */
+.card .thumb.cropping{cursor:ns-resize; outline:2px solid var(--yel); outline-offset:-2px}
+.card .thumb.cropping::after{
+  content:"↕ przeciągnij • klik = OK • Esc = anuluj"; position:absolute; z-index:5;
+  left:0; right:0; bottom:0; padding:3px 5px; font-size:9px; text-align:center;
+  background:rgba(17,17,27,.75); color:var(--yel);
+}
 /* ── grzbiet platformy (spine) ── */
 .card .thumb .spine{
   position:absolute; top:0; bottom:0; width:22%; z-index:2;
