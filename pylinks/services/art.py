@@ -17,10 +17,12 @@ import re
 import urllib.request
 from pathlib import Path
 
-# ikony = KWADRAT. Kwadratowe gridy do ikony:
-_SQUARE_DIMS = "512x512,1024x1024"
-# portret (plakaty) — pokazywane też w wyborze, ale po kwadratach
-_PORTRAIT_DIMS = "600x900,342x482,660x930,512x512,1024x1024"
+# DWA TRYBY grafiki (jak w starej wersji):
+#   "icon"  → skróty .lnk z własną ikoną = KWADRAT
+#   "steam" → grafika wprost do biblioteki Steam = PORTRET (grid 600x900)
+_SQUARE_DIMS = "512x512,1024x1024"                 # kwadraty (tryb ikon)
+_STEAM_DIMS = "600x900,342x482,660x930"            # portrety (tryb Steam), bez landscape
+_PORTRAIT_DIMS = "600x900,342x482,660x930,512x512,1024x1024"  # portret+kwadrat (fallback)
 
 
 # ── HTTP (port fetch / fetch_api) ──────────────────────────────────────────
@@ -167,16 +169,21 @@ def _to_data_uri(data: bytes) -> str:
     return f"data:{m};base64,{base64.b64encode(data).decode('ascii')}"
 
 
-# ── okładka dla gry (z cache dyskowym) ─────────────────────────────────────
-def _covers_dir(cache_dir: Path) -> Path:
-    d = Path(cache_dir) / "covers"
+# ── okładka dla gry (z cache dyskowym, per tryb) ───────────────────────────
+def _mode(mode: str) -> str:
+    return "steam" if str(mode).lower() == "steam" else "icon"
+
+
+def _covers_dir(cache_dir: Path, mode: str = "icon") -> Path:
+    # osobny cache per tryb: gra może mieć i kwadratową ikonę, i portret Steam
+    d = Path(cache_dir) / "covers" / _mode(mode)
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def cached_cover(cache_dir: Path, key: str) -> str | None:
-    """Zwraca data-URI z cache dyskowego, jeśli okładka już pobrana."""
-    d = _covers_dir(cache_dir)
+def cached_cover(cache_dir: Path, key: str, mode: str = "icon") -> str | None:
+    """Zwraca data-URI z cache dyskowego (dla danego trybu), jeśli pobrane."""
+    d = _covers_dir(cache_dir, mode)
     safe = _safe_key(key)
     for f in d.glob(safe + ".*"):
         try:
@@ -186,17 +193,18 @@ def cached_cover(cache_dir: Path, key: str) -> str | None:
     return None
 
 
-def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict) -> dict:
-    """Pobiera (lub czyta z cache) okładkę gry. Zwraca:
-        {"key", "found": bool, "data_uri": str|None, "cached": bool}
+def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict,
+                mode: str = "icon") -> dict:
+    """Pobiera (lub czyta z cache) grafikę gry dla trybu.
+
+    icon  → KWADRAT (kwadratowe gridy → ikony → portret jako ostateczność)
+    steam → PORTRET (grid 600x900 → kwadrat jako ostateczność)
     """
-    # 1) cache dyskowy
-    hit = cached_cover(cache_dir, key)
+    mode = _mode(mode)
+    hit = cached_cover(cache_dir, key, mode)
     if hit:
         return {"key": key, "found": True, "data_uri": hit, "cached": True}
 
-    # 2) sieć — SteamGridDB. Ikony są kwadratowe: preferuj KWADRAT → ikonę →
-    #    dopiero potem plakat (karta w GUI jest kwadratowa).
     sgdb_key = (cfg.get("api_keys", {}) or {}).get("sgdb_key", "")
     client = SgdbClient(sgdb_key)
     if not client.ok:
@@ -207,14 +215,19 @@ def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict) -> dict:
     if not ref:
         return {"key": key, "found": False, "data_uri": None, "cached": False}
     kind_id, val = ref
-    if kind_id == "appid":
-        grids = (client.grids_for_appid(val, dims=_SQUARE_DIMS)
-                 or client.icons_for_appid(val)
-                 or client.grids_for_appid(val, dims=""))
+
+    def _grids(dims):
+        return (client.grids_for_appid(val, dims=dims) if kind_id == "appid"
+                else client.grids_for_id(val, dims=dims))
+
+    def _icons():
+        return (client.icons_for_appid(val) if kind_id == "appid"
+                else client.icons_for_id(val))
+
+    if mode == "steam":
+        grids = _grids(_STEAM_DIMS) or _grids(_SQUARE_DIMS) or _icons()
     else:
-        grids = (client.grids_for_id(val, dims=_SQUARE_DIMS)
-                 or client.icons_for_id(val)
-                 or client.grids_for_id(val, dims=""))
+        grids = _grids(_SQUARE_DIMS) or _icons() or _grids(_STEAM_DIMS)
     if not grids:
         return {"key": key, "found": False, "data_uri": None, "cached": False}
 
@@ -225,10 +238,8 @@ def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict) -> dict:
         data = fetch(url) or (fetch(g.get("url")) if g.get("url") else None)
         if not data:
             continue
-        # zapis na dysk
         try:
-            mime = _mime(data)
-            out = _covers_dir(cache_dir) / (_safe_key(key) + _ext(mime))
+            out = _covers_dir(cache_dir, mode) / (_safe_key(key) + _ext(_mime(data)))
             out.write_bytes(data)
         except Exception:
             pass
@@ -242,9 +253,9 @@ def _safe_key(key: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", key)[:180]
 
 
-def clear_cover(cache_dir: Path, key: str) -> None:
-    """Usuwa okładkę z cache dyskowego (reset do automatycznej)."""
-    d = _covers_dir(cache_dir)
+def clear_cover(cache_dir: Path, key: str, mode: str = "icon") -> None:
+    """Usuwa grafikę z cache dyskowego danego trybu (reset do automatycznej)."""
+    d = _covers_dir(cache_dir, mode)
     for f in d.glob(_safe_key(key) + ".*"):
         try:
             f.unlink()
@@ -286,16 +297,15 @@ def _resolve_ref(client: SgdbClient, game: dict, query: str):
 
 
 def candidates_for_game(cfg: dict, game: dict, query: str = "",
-                        limit: int = 24) -> list[dict]:
-    """Lista kandydatów do okna wyboru — IKONY + KWADRATY najpierw, potem plakaty.
+                        mode: str = "icon", limit: int = 24) -> list[dict]:
+    """Lista kandydatów do okna wyboru — zależnie od trybu.
 
-    Ikony są kwadratowe, więc dla skrótu-ikony to one są potrzebne. Zbieramy
-    z trzech źródeł SGDB i scalamy (dedup po id, zachowana kolejność):
-        1. /icons  (prawdziwe ikony gry)         → kind "ikona"
-        2. /grids 512x512,1024x1024 (kwadraty)   → kind "kwadrat"
-        3. /grids wszystkie wymiary (plakaty)    → kind "plakat"
+    icon  → IKONY + KWADRATY (plakat tylko jako zapas, gdy brak kwadratów)
+    steam → PLAKATY (portret 600x900); kwadraty jako zapas.
+    Kolejność źródeł = kolejność wyświetlania. Bez landscape (wide 920x430).
     Każdy kandydat: {id, url, thumb (data-URI), w, h, style, kind, square}.
     """
+    mode = _mode(mode)
     client = SgdbClient((cfg.get("api_keys", {}) or {}).get("sgdb_key", ""))
     if not client.ok:
         return []
@@ -305,21 +315,27 @@ def candidates_for_game(cfg: dict, game: dict, query: str = "",
         return []
     kind_id, val = ref
 
-    icons: list[dict] = []
-    squares: list[dict] = []
-    posters: list[dict] = []
-    if kind_id == "appid":
-        icons = client.icons_for_appid(val)
-        squares = client.grids_for_appid(val, per_page=limit, dims=_SQUARE_DIMS)
-        posters = client.grids_for_appid(val, per_page=limit, dims="")
+    def _grids(dims):
+        return (client.grids_for_appid(val, per_page=limit, dims=dims)
+                if kind_id == "appid"
+                else client.grids_for_id(val, per_page=limit, dims=dims))
+
+    def _icons():
+        return (client.icons_for_appid(val) if kind_id == "appid"
+                else client.icons_for_id(val))
+
+    if mode == "steam":
+        # portret na pierwszym miejscu, kwadrat jako alternatywa
+        groups = (("plakat", _grids(_STEAM_DIMS)),
+                  ("kwadrat", _grids(_SQUARE_DIMS)))
     else:
-        icons = client.icons_for_id(val)
-        squares = client.grids_for_id(val, per_page=limit, dims=_SQUARE_DIMS)
-        posters = client.grids_for_id(val, per_page=limit, dims="")
+        groups = (("ikona", _icons()),
+                  ("kwadrat", _grids(_SQUARE_DIMS)),
+                  ("plakat", _grids(_STEAM_DIMS)))
 
     merged: list[tuple[str, dict]] = []
     seen: set[str] = set()
-    for kind, items in (("ikona", icons), ("kwadrat", squares), ("plakat", posters)):
+    for kind, items in groups:
         for it in items:
             i = str(it.get("id", ""))
             if not i or i in seen:
@@ -377,10 +393,10 @@ def suggest_games(cfg: dict, query: str, limit: int = 25) -> list[dict]:
     return out
 
 
-def save_chosen_cover(cache_dir: Path, key: str, full_url: str) -> dict:
-    """Pobiera pełną okładkę z URL-a i zapisuje jako okładkę gry (nadpisuje).
-
-    Zwraca {"found", "data_uri"}.
+def save_chosen_cover(cache_dir: Path, key: str, full_url: str,
+                      mode: str = "icon") -> dict:
+    """Pobiera pełną grafikę z URL-a i zapisuje jako wybraną (nadpisuje) w
+    cache danego trybu. Zwraca {"found", "data_uri"}.
     """
     if not full_url:
         return {"found": False, "data_uri": None}
@@ -388,7 +404,7 @@ def save_chosen_cover(cache_dir: Path, key: str, full_url: str) -> dict:
     if not data:
         return {"found": False, "data_uri": None}
     # usuń stare warianty (inne rozszerzenie) i zapisz nowy
-    d = _covers_dir(cache_dir)
+    d = _covers_dir(cache_dir, mode)
     safe = _safe_key(key)
     for f in d.glob(safe + ".*"):
         try:

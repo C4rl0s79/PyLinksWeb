@@ -10,11 +10,15 @@ let CUR_SRC  = "";      // aktywny filtr źródła ("" = wszystkie)
 let FILTER   = "";      // filtr tekstowy nazwy
 let LOAD_TOK = 0;       // token anulowania leniwego ładowania okładek
 let FIT      = "pad";   // tryb dopasowania ikony (kwadrat): "pad" | "crop"
+let MODE     = "icon";  // tryb grafiki: "icon" (kwadrat) | "steam" (portret)
 
 function applyFit(){
-  el("grid").className = "grid fit-" + FIT;
-  const b = el("btnFit");
-  if (b) b.textContent = FIT === "crop" ? "⬛ Wypełnij" : "⬚ Całość";
+  // klasa siatki niesie i tryb grafiki, i dopasowanie (istotne tylko dla ikon)
+  el("grid").className = "grid mode-" + MODE + " fit-" + FIT;
+  const bf = el("btnFit");
+  if (bf){ bf.textContent = FIT === "crop" ? "⬛ Wypełnij" : "⬚ Całość"; bf.hidden = (MODE !== "icon"); }
+  const bm = el("btnMode");
+  if (bm) bm.textContent = MODE === "steam" ? "🖼 Tryb: Steam" : "🖼 Tryb: Ikony";
 }
 
 function setBridge(ok, txt){
@@ -160,7 +164,7 @@ async function loadCovers(games){
   for (const g of games){
     if (!g.key) continue;
     try{
-      const r = await api("cover_cached", g.key);
+      const r = await api("cover_cached", g.key, MODE);
       if (tok !== LOAD_TOK) return;
       if (r.found) setCover(g.key, r.data_uri);
       else missing.push(g);
@@ -171,7 +175,7 @@ async function loadCovers(games){
     const c = document.querySelector(`.card[data-key="${cssEsc(g.key)}"] .thumb`);
     if (c) c.classList.add("loading");
     try{
-      const r = await api("fetch_cover", g.key);
+      const r = await api("fetch_cover", g.key, MODE);
       if (tok !== LOAD_TOK) return;
       setCover(g.key, r.found ? r.data_uri : null);
     }catch(e){ if (c) c.classList.remove("loading"); }
@@ -200,7 +204,7 @@ async function resetCover(game){
   const thumb = document.querySelector(`.card[data-key="${cssEsc(key)}"] .thumb`);
   if (thumb){ thumb.classList.add("loading"); const im=thumb.querySelector("img"); if(im) im.remove(); }
   try{
-    const r = await api("reset_cover", key);
+    const r = await api("reset_cover", key, MODE);
     setCover(key, r.found ? r.data_uri : null);
   }catch(e){ if (thumb) thumb.classList.remove("loading"); }
 }
@@ -238,7 +242,7 @@ async function pkLoad(query){
   const box = el("pkGrid");
   box.innerHTML = `<div class="pk-loading"><div class="spin"></div>Szukam okładek…</div>`;
   try{
-    const r = await api("cover_candidates", PK_GAME.key, query || "");
+    const r = await api("cover_candidates", PK_GAME.key, query || "", MODE);
     if (tok !== PK_TOK) return;
     renderCandidates(r);
   }catch(e){
@@ -273,7 +277,7 @@ async function chooseCover(url){
   const box = el("pkGrid");
   box.innerHTML = `<div class="pk-loading"><div class="spin"></div>Pobieram okładkę…</div>`;
   try{
-    const r = await api("choose_cover", key, url);
+    const r = await api("choose_cover", key, url, MODE);
     if (r.found){
       // podmień okładkę w karcie i zamknij
       const thumb = document.querySelector(`.card[data-key="${cssEsc(key)}"] .thumb`);
@@ -336,7 +340,7 @@ async function pkLoadById(id){
   const box = el("pkGrid");
   box.innerHTML = `<div class="pk-loading"><div class="spin"></div>Szukam okładek…</div>`;
   try{
-    const r = await api("cover_candidates_by_id", PK_GAME.key, id);
+    const r = await api("cover_candidates_by_id", PK_GAME.key, id, MODE);
     if (tok !== PK_TOK) return;
     renderCandidates(r);
   }catch(e){ if (tok===PK_TOK) box.innerHTML = `<div class="pk-empty">Błąd: ${e.message}</div>`; }
@@ -386,6 +390,12 @@ el("btnFit").onclick = async () => {
   FIT = (FIT === "crop") ? "pad" : "crop";
   applyFit();
   try{ await api("set_fit_mode", FIT); }catch(_){}
+};
+el("btnMode").onclick = () => {
+  MODE = (MODE === "steam") ? "icon" : "steam";
+  applyFit();
+  // grafiki różnią się per tryb — przeładuj okładki widocznych gier
+  if (PC_GAMES.length) renderPC();
 };
 el("filter").oninput = (e) => { FILTER = e.target.value.trim(); renderPC(); };
 

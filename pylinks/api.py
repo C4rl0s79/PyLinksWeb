@@ -159,28 +159,26 @@ class Api:
                 return g
         return None
 
-    # --- okładki (SteamGridDB + cache dyskowy) ---
-    def cover_cached(self, key: str) -> dict:
-        """Szybki odczyt okładki z cache dyskowego (bez sieci)."""
-        uri = art.cached_cover(CACHE_DIR, key)
+    # --- grafiki: dwa tryby "icon" (kwadrat) / "steam" (portret) ---
+    def cover_cached(self, key: str, mode: str = "icon") -> dict:
+        """Szybki odczyt grafiki z cache dyskowego danego trybu (bez sieci)."""
+        uri = art.cached_cover(CACHE_DIR, key, mode)
         return {"key": key, "found": bool(uri), "data_uri": uri, "cached": True}
 
-    def fetch_cover(self, key: str) -> dict:
-        """Pobiera okładkę z SGDB (lub czyta z cache). Może ruszyć sieć."""
+    def fetch_cover(self, key: str, mode: str = "icon") -> dict:
+        """Pobiera grafikę z SGDB (lub czyta z cache) dla trybu."""
         g = self._find_game(key)
         if not g:
             return {"key": key, "found": False, "data_uri": None,
                     "reason": "nieznana gra (najpierw skan)"}
-        cfg = _load_config()
-        return art.fetch_cover(cfg, CACHE_DIR, key, g)
+        return art.fetch_cover(_load_config(), CACHE_DIR, key, g, mode)
 
-    def cover_candidates(self, key: str, query: str = "") -> dict:
-        """Lista okładek-kandydatów do okna wyboru (miniatury jako data-URI)."""
+    def cover_candidates(self, key: str, query: str = "", mode: str = "icon") -> dict:
+        """Lista kandydatów do okna wyboru (miniatury jako data-URI) dla trybu."""
         g = self._find_game(key)
         if not g:
             return {"key": key, "candidates": [], "reason": "nieznana gra"}
-        cfg = _load_config()
-        cands = art.candidates_for_game(cfg, g, query=query)
+        cands = art.candidates_for_game(_load_config(), g, query=query, mode=mode)
         return {"key": key, "candidates": cands,
                 "reason": "" if cands else "brak wyników / brak klucza SGDB"}
 
@@ -188,44 +186,44 @@ class Api:
         """Podpowiedzi tytułów (autouzupełnianie SGDB) dla pola szukania."""
         return art.suggest_games(_load_config(), query)
 
-    def cover_candidates_by_id(self, key: str, sgdb_id) -> dict:
+    def cover_candidates_by_id(self, key: str, sgdb_id, mode: str = "icon") -> dict:
         """Kandydaci dla konkretnego SGDB game id (klik w podpowiedź)."""
-        return self.cover_candidates(key, str(sgdb_id))
+        return self.cover_candidates(key, str(sgdb_id), mode)
 
-    def choose_cover(self, key: str, url: str) -> dict:
-        """Ustawia wskazaną okładkę jako wybraną: zapis w cache + config."""
-        res = art.save_chosen_cover(CACHE_DIR, key, url)
+    def choose_cover(self, key: str, url: str, mode: str = "icon") -> dict:
+        """Ustawia wskazaną grafikę jako wybraną: zapis w cache + config."""
+        res = art.save_chosen_cover(CACHE_DIR, key, url, mode)
         if res.get("found"):
-            self._save_selection(key, url)
+            self._save_selection(key, url, mode)
         return {"key": key, "found": res.get("found", False),
                 "data_uri": res.get("data_uri")}
 
-    def reset_cover(self, key: str) -> dict:
-        """Przywraca automatyczną okładkę: usuwa wybór z cache + config,
-        pobiera na nowo (kwadrat → ikona → plakat)."""
-        art.clear_cover(CACHE_DIR, key)
-        self._save_selection(key, None)
+    def reset_cover(self, key: str, mode: str = "icon") -> dict:
+        """Przywraca automatyczną grafikę trybu: usuwa wybór + pobiera na nowo."""
+        art.clear_cover(CACHE_DIR, key, mode)
+        self._save_selection(key, None, mode)
         g = self._find_game(key)
         if not g:
             return {"key": key, "found": False, "data_uri": None}
-        return art.fetch_cover(_load_config(), CACHE_DIR, key, g)
+        return art.fetch_cover(_load_config(), CACHE_DIR, key, g, mode)
 
-    # --- trwały zapis wyboru okładki (config.selected_icon_keys) ---
-    def _save_selection(self, key: str, url) -> None:
+    # --- trwały zapis wyboru (icon→selected_icon_keys, steam→steam_art_by_key) ---
+    def _save_selection(self, key: str, url, mode: str = "icon") -> None:
+        cfg_key = "steam_art_by_key" if str(mode).lower() == "steam" else "selected_icon_keys"
         try:
             raw = {}
             if CONFIG_PATH.exists():
                 raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
             else:
                 raw = _default_config()
-            sel = raw.get("selected_icon_keys")
+            sel = raw.get(cfg_key)
             if not isinstance(sel, dict):
                 sel = {}
             if url is None:
                 sel.pop(key, None)       # reset — usuń wybór
             else:
                 sel[key] = url
-            raw["selected_icon_keys"] = sel
+            raw[cfg_key] = sel
             CONFIG_PATH.write_text(
                 json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
