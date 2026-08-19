@@ -104,8 +104,11 @@ class SgdbClient:
                 return res
         return []
 
-    def _grids(self, path: str, per_page: int) -> list[dict]:
-        url = f"{self.BASE}/{path}?dimensions={_PORTRAIT_DIMS}&limit={per_page}&page=0"
+    def _grids(self, path: str, per_page: int, dims: str = _PORTRAIT_DIMS) -> list[dict]:
+        url = f"{self.BASE}/{path}?"
+        if dims:
+            url += f"dimensions={dims}&"
+        url += f"limit={per_page}&page=0"
         d = fetch_api(url, hdrs=self._hdr())
         if not d:
             return []
@@ -115,11 +118,11 @@ class SgdbClient:
         except Exception:
             return []
 
-    def grids_for_id(self, sgdb_id, per_page: int = 8) -> list[dict]:
-        return self._grids(f"grids/game/{sgdb_id}", per_page)
+    def grids_for_id(self, sgdb_id, per_page: int = 8, dims: str = _PORTRAIT_DIMS) -> list[dict]:
+        return self._grids(f"grids/game/{sgdb_id}", per_page, dims)
 
-    def grids_for_appid(self, appid, per_page: int = 8) -> list[dict]:
-        return self._grids(f"grids/steam/{appid}", per_page)
+    def grids_for_appid(self, appid, per_page: int = 8, dims: str = _PORTRAIT_DIMS) -> list[dict]:
+        return self._grids(f"grids/steam/{appid}", per_page, dims)
 
 
 # ── data-URI helpers ───────────────────────────────────────────────────────
@@ -213,3 +216,92 @@ def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict) -> dict:
 
 def _safe_key(key: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", key)[:180]
+
+
+# ── wybór okładki: kandydaci + zapis ───────────────────────────────────────
+def parse_sgdb_ref(text: str) -> int | None:
+    """Wyłuskuje SGDB game id z URL-a (…/game/12345) albo z gołej liczby."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    m = re.search(r"/game/(\d+)", text)
+    if m:
+        return int(m.group(1))
+    if text.isdigit():
+        return int(text)
+    return None
+
+
+def candidates_for_game(cfg: dict, game: dict, query: str = "",
+                        limit: int = 18) -> list[dict]:
+    """Zwraca listę okładek-kandydatów dla okna wyboru.
+
+    query pusty → auto (appid gry lub szukanie po nazwie).
+    query = URL/ID SGDB → gry po tym id.
+    query = tekst → szukanie po tej frazie.
+    Każdy kandydat: {id, url, thumb (data-URI), w, h, style}.
+    """
+    client = SgdbClient((cfg.get("api_keys", {}) or {}).get("sgdb_key", ""))
+    if not client.ok:
+        return []
+
+    grids: list[dict] = []
+    ref = parse_sgdb_ref(query)
+    if ref is not None:
+        grids = client.grids_for_id(ref, per_page=limit, dims="")
+    elif query.strip():
+        results = client.search_with_fallback(query.strip())
+        if results:
+            grids = client.grids_for_id(results[0].get("id"), per_page=limit, dims="")
+    else:
+        appid = game.get("appid")
+        if appid:
+            grids = client.grids_for_appid(appid, per_page=limit, dims="")
+        if not grids:
+            results = client.search_with_fallback(game.get("name", ""))
+            if results:
+                grids = client.grids_for_id(results[0].get("id"), per_page=limit, dims="")
+
+    out: list[dict] = []
+    for g in grids[:limit]:
+        thumb_url = g.get("thumb") or g.get("url")
+        if not thumb_url:
+            continue
+        data = fetch(thumb_url)
+        if not data:
+            continue
+        out.append({
+            "id": str(g.get("id", "")),
+            "url": g.get("url", ""),
+            "thumb": _to_data_uri(data),
+            "w": g.get("width", 0),
+            "h": g.get("height", 0),
+            "style": (g.get("style") or ""),
+        })
+    return out
+
+
+def save_chosen_cover(cache_dir: Path, key: str, full_url: str) -> dict:
+    """Pobiera pełną okładkę z URL-a i zapisuje jako okładkę gry (nadpisuje).
+
+    Zwraca {"found", "data_uri"}.
+    """
+    if not full_url:
+        return {"found": False, "data_uri": None}
+    data = fetch(full_url)
+    if not data:
+        return {"found": False, "data_uri": None}
+    # usuń stare warianty (inne rozszerzenie) i zapisz nowy
+    d = _covers_dir(cache_dir)
+    safe = _safe_key(key)
+    for f in d.glob(safe + ".*"):
+        try:
+            f.unlink()
+        except Exception:
+            pass
+    try:
+        out = d / (safe + _ext(_mime(data)))
+        out.write_bytes(data)
+    except Exception:
+        pass
+    return {"found": True, "data_uri": _to_data_uri(data)}

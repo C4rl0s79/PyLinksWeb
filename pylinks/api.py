@@ -174,6 +174,42 @@ class Api:
         cfg = _load_config()
         return art.fetch_cover(cfg, CACHE_DIR, key, g)
 
+    def cover_candidates(self, key: str, query: str = "") -> dict:
+        """Lista okładek-kandydatów do okna wyboru (miniatury jako data-URI)."""
+        g = self._find_game(key)
+        if not g:
+            return {"key": key, "candidates": [], "reason": "nieznana gra"}
+        cfg = _load_config()
+        cands = art.candidates_for_game(cfg, g, query=query)
+        return {"key": key, "candidates": cands,
+                "reason": "" if cands else "brak wyników / brak klucza SGDB"}
+
+    def choose_cover(self, key: str, url: str) -> dict:
+        """Ustawia wskazaną okładkę jako wybraną: zapis w cache + config."""
+        res = art.save_chosen_cover(CACHE_DIR, key, url)
+        if res.get("found"):
+            self._save_selection(key, url)
+        return {"key": key, "found": res.get("found", False),
+                "data_uri": res.get("data_uri")}
+
+    # --- trwały zapis wyboru okładki (config.selected_icon_keys) ---
+    def _save_selection(self, key: str, url: str) -> None:
+        try:
+            raw = {}
+            if CONFIG_PATH.exists():
+                raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            else:
+                raw = _default_config()
+            sel = raw.get("selected_icon_keys")
+            if not isinstance(sel, dict):
+                sel = {}
+            sel[key] = url
+            raw["selected_icon_keys"] = sel
+            CONFIG_PATH.write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
     # --- config ---
     def get_config(self) -> dict:
         return _load_config()

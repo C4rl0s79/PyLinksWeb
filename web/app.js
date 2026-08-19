@@ -120,7 +120,10 @@ function renderPC(){
 function card(name, sub, src, game){
   const c = document.createElement("div");
   c.className = "card";
-  if (game && game.key) c.dataset.key = game.key;
+  if (game && game.key){
+    c.dataset.key = game.key;
+    c.onclick = () => openPicker(game);
+  }
   c.title = (game && game.game_dir) ? game.game_dir : name;
   c.innerHTML =
     `<div class="thumb"><span class="src src-${src}">${src}</span><span class="ph">🎮</span></div>
@@ -168,6 +171,86 @@ async function loadCovers(games){
 function clearActive(){
   document.querySelectorAll(".side-item,.plat-item").forEach(n => n.classList.remove("active"));
 }
+
+// ── okno wyboru okładki ─────────────────────────────────────────────────────
+let PK_GAME = null;     // gra, dla której otwarto wybór
+let PK_TOK  = 0;        // token anulowania ładowania kandydatów
+
+function openPicker(game){
+  PK_GAME = game;
+  el("pkTitle").textContent = "Okładka: " + game.name;
+  el("pkSub").textContent = game.source ? game.source.toUpperCase() : "";
+  el("pkQuery").value = "";
+  el("picker").hidden = false;
+  pkLoad("");
+  el("pkQuery").focus();
+}
+function closePicker(){ el("picker").hidden = true; PK_GAME = null; PK_TOK++; }
+
+async function pkLoad(query){
+  if (!PK_GAME) return;
+  const tok = ++PK_TOK;
+  const box = el("pkGrid");
+  box.innerHTML = `<div class="pk-loading"><div class="spin"></div>Szukam okładek…</div>`;
+  try{
+    const r = await api("cover_candidates", PK_GAME.key, query || "");
+    if (tok !== PK_TOK) return;
+    const cs = r.candidates || [];
+    if (!cs.length){
+      box.innerHTML = `<div class="pk-empty">${r.reason || "Brak wyników."}</div>`;
+      return;
+    }
+    box.innerHTML = "";
+    for (const c of cs){
+      const it = document.createElement("div");
+      it.className = "pk-item";
+      it.title = `${c.w}×${c.h} ${c.style||""}`.trim();
+      it.innerHTML =
+        `<img src="${c.thumb}" alt=""><div class="meta">${c.w}×${c.h}${c.style?" · "+c.style:""}</div>`;
+      it.onclick = () => chooseCover(c.url);
+      box.appendChild(it);
+    }
+  }catch(e){
+    if (tok === PK_TOK) box.innerHTML = `<div class="pk-empty">Błąd: ${e.message}</div>`;
+  }
+}
+
+async function chooseCover(url){
+  if (!PK_GAME) return;
+  const key = PK_GAME.key;
+  const box = el("pkGrid");
+  box.innerHTML = `<div class="pk-loading"><div class="spin"></div>Pobieram okładkę…</div>`;
+  try{
+    const r = await api("choose_cover", key, url);
+    if (r.found){
+      // podmień okładkę w karcie i zamknij
+      const thumb = document.querySelector(`.card[data-key="${cssEsc(key)}"] .thumb`);
+      if (thumb){
+        thumb.classList.remove("loading");
+        const old = thumb.querySelector("img");
+        if (old) old.remove();
+        const img = document.createElement("img");
+        img.src = r.data_uri;
+        thumb.insertBefore(img, thumb.querySelector(".ph"));
+      }
+      closePicker();
+    }else{
+      box.innerHTML = `<div class="pk-empty">Nie udało się pobrać okładki.</div>`;
+    }
+  }catch(e){ box.innerHTML = `<div class="pk-empty">Błąd: ${e.message}</div>`; }
+}
+
+el("pkClose").onclick = closePicker;
+el("pkSearch").onclick = () => pkLoad(el("pkQuery").value.trim());
+el("pkQuery").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") pkLoad(el("pkQuery").value.trim());
+});
+el("picker").addEventListener("click", (e) => {
+  if (e.target === el("picker")) closePicker();   // klik w tło zamyka
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !el("picker").hidden) closePicker();
+});
 
 // ── zdarzenia ──────────────────────────────────────────────────────────────
 el("btnScan").onclick = runScan;
