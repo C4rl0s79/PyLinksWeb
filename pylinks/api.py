@@ -171,10 +171,66 @@ class Api:
     # --- grafiki: dwa tryby "icon" (kwadrat) / "steam" (portret) ---
     def cover_cached(self, key: str, mode: str = "icon") -> dict:
         """Szybki odczyt grafiki z cache dyskowego danego trybu (bez sieci).
-        Zwraca PRZETWORZONĄ miniaturę (kwadrat/portret) — kształt upieczony w PIL."""
-        fit = _load_config().get("icon_fit_mode", "pad")
-        uri = art.cached_cover(CACHE_DIR, key, mode, fit)
+        Zwraca PRZETWORZONĄ miniaturę (kwadrat/portret) — kształt upieczony w PIL.
+        Uwzględnia per-grę kadr (config.icon_crop_by_key)."""
+        cfg = _load_config()
+        fit, off = self._crop_for(key, cfg)
+        uri = art.cached_cover(CACHE_DIR, key, mode, fit, off)
         return {"key": key, "found": bool(uri), "data_uri": uri, "cached": True}
+
+    @staticmethod
+    def _crop_for(key: str, cfg: dict):
+        """(fit, offset) dla gry: per-grę override albo globalny fit."""
+        store = cfg.get("icon_crop_by_key", {}) or {}
+        e = store.get(key) if isinstance(store, dict) else None
+        if isinstance(e, dict):
+            return (e.get("fit", "pad"),
+                    float(e.get("offset", 0.5)))
+        return (cfg.get("icon_fit_mode", "pad"), 0.5)
+
+    # --- kadrowanie per gra (prawy klik → Kadruj) ---
+    def crop_get(self, key: str, mode: str = "icon") -> dict:
+        """Surowy obraz + bieżące ustawienia kadru do okna kadrowania."""
+        cfg = _load_config()
+        fit, off = self._crop_for(key, cfg)
+        return {"key": key, "raw": art.raw_cover(CACHE_DIR, key, mode),
+                "fit": fit, "offset": off}
+
+    def crop_apply(self, key: str, fit: str, offset, mode: str = "icon") -> dict:
+        """Zapisuje per-grę kadr i zwraca przepieczoną miniaturę."""
+        fit = "crop" if str(fit).lower() == "crop" else "pad"
+        try:
+            offset = max(0.0, min(1.0, float(offset)))
+        except Exception:
+            offset = 0.5
+        self._save_crop(key, {"fit": fit, "offset": offset})
+        uri = art.cached_cover(CACHE_DIR, key, mode, fit, offset)
+        return {"key": key, "found": bool(uri), "data_uri": uri}
+
+    def crop_reset(self, key: str, mode: str = "icon") -> dict:
+        """Usuwa per-grę kadr (wraca do globalnego dopasowania)."""
+        self._save_crop(key, None)
+        cfg = _load_config()
+        fit, off = self._crop_for(key, cfg)
+        uri = art.cached_cover(CACHE_DIR, key, mode, fit, off)
+        return {"key": key, "found": bool(uri), "data_uri": uri}
+
+    def _save_crop(self, key: str, entry) -> None:
+        try:
+            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) \
+                if CONFIG_PATH.exists() else _default_config()
+            store = raw.get("icon_crop_by_key")
+            if not isinstance(store, dict):
+                store = {}
+            if entry is None:
+                store.pop(key, None)
+            else:
+                store[key] = entry
+            raw["icon_crop_by_key"] = store
+            CONFIG_PATH.write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
     def fetch_cover(self, key: str, mode: str = "icon") -> dict:
         """Pobiera grafikę z SGDB (lub czyta z cache) dla trybu."""

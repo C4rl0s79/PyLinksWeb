@@ -224,8 +224,67 @@ el("ctxMenu").addEventListener("click", (e) => {
   hideCtx();
   if (!g) return;
   if (act === "pick") openPicker(g);
+  else if (act === "crop") openCrop(g);
   else if (act === "reset") resetCover(g);
 });
+
+// ── okno kadrowania (pad/crop + pozycja), podgląd po stronie klienta ────────
+let CROP_GAME = null, CROP_IMG = null;
+function openCrop(game){
+  CROP_GAME = game; CROP_IMG = null;
+  el("cropTitle").textContent = "Kadrowanie: " + game.name;
+  el("cropModal").hidden = false;
+  api("crop_get", game.key, MODE).then(r => {
+    document.querySelector(`input[name=cropFit][value="${r.fit==='crop'?'crop':'pad'}"]`).checked = true;
+    el("cropOffset").value = (r.offset != null ? r.offset : 0.5);
+    if (r.raw){
+      const im = new Image();
+      im.onload = () => { CROP_IMG = im; drawCrop(); };
+      im.src = r.raw;
+    } else { drawCrop(); }
+    updateCropOffState();
+  }).catch(()=>{});
+}
+function closeCrop(){ el("cropModal").hidden = true; CROP_GAME = null; CROP_IMG = null; }
+function cropFit(){ return document.querySelector("input[name=cropFit]:checked").value; }
+function updateCropOffState(){ el("cropOffRow").classList.toggle("dis", cropFit() !== "crop"); }
+
+function drawCrop(){
+  const cv = el("cropCanvas"), ctx = cv.getContext("2d");
+  ctx.clearRect(0,0,256,256);
+  if (!CROP_IMG) return;
+  const iw = CROP_IMG.naturalWidth, ih = CROP_IMG.naturalHeight;
+  if (cropFit() === "crop"){
+    const off = +el("cropOffset").value;
+    const side = Math.min(iw, ih);
+    let sx, sy;
+    if (ih > iw){ sx = (iw-side)/2; sy = (ih-side)*off; }
+    else { sx = (iw-side)*off; sy = (ih-side)/2; }
+    ctx.drawImage(CROP_IMG, sx, sy, side, side, 0, 0, 256, 256);
+  } else {
+    const s = Math.min(256/iw, 256/ih);
+    const w = iw*s, h = ih*s;
+    ctx.drawImage(CROP_IMG, (256-w)/2, (256-h)/2, w, h);
+  }
+}
+
+el("cropClose").onclick = closeCrop;
+document.querySelectorAll("input[name=cropFit]").forEach(r =>
+  r.onchange = () => { updateCropOffState(); drawCrop(); });
+el("cropOffset").oninput = drawCrop;
+el("cropModal").addEventListener("click", (e) => { if (e.target === el("cropModal")) closeCrop(); });
+el("cropSave").onclick = async () => {
+  if (!CROP_GAME) return;
+  const r = await api("crop_apply", CROP_GAME.key, cropFit(), +el("cropOffset").value, MODE);
+  if (r.found) setCover(CROP_GAME.key, r.data_uri);
+  closeCrop();
+};
+el("cropResetBtn").onclick = async () => {
+  if (!CROP_GAME) return;
+  const r = await api("crop_reset", CROP_GAME.key, MODE);
+  if (r.found) setCover(CROP_GAME.key, r.data_uri);
+  closeCrop();
+};
 document.addEventListener("click", () => hideCtx());
 document.addEventListener("scroll", () => hideCtx(), true);
 

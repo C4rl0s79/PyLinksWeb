@@ -210,12 +210,28 @@ def _fit_cover(im, tw, th):
     return src.crop((left, top, left + tw, top + th))
 
 
+def _crop_square_offset(im, offset: float):
+    """Przycina dłuższy bok do kwadratu; pozycja kadru = offset 0..1
+    (portret: 0=góra…1=dół; panorama: 0=lewo…1=prawo). Jak w oryginale."""
+    w, h = im.size
+    if w == h:
+        return im
+    side = min(w, h)
+    off = max(0.0, min(1.0, offset))
+    if h > w:
+        left, top = (w - side) // 2, int(round((h - side) * off))
+    else:
+        left, top = int(round((w - side) * off)), (h - side) // 2
+    return im.crop((left, top, left + side, top + side))
+
+
 def make_display_thumb(data: bytes, mode: str = "icon",
-                       fit: str = "pad", size: int = 256) -> bytes:
+                       fit: str = "pad", offset: float = 0.5,
+                       size: int = 256) -> bytes:
     """Zwraca PNG w docelowym kształcie: icon→kwadrat(size²), steam→portret(2:3).
 
-    fit dotyczy tylko trybu ikon: "pad" = cała grafika + przezroczyste marginesy,
-    "crop" = wypełnia kwadrat, brzegi przycięte.
+    Tryb ikon: fit="pad" = RAMKI (cała grafika + przezroczyste marginesy),
+    fit="crop" = KADROWANIE (przytnij dłuższy bok; pozycja = offset 0..1).
     """
     if not PIL_OK:
         return data
@@ -225,8 +241,10 @@ def make_display_thumb(data: bytes, mode: str = "icon",
         return data
     if _mode(mode) == "steam":
         out = _fit_cover(im, size, round(size * 1.5))     # portret 2:3, wypełnij
+    elif fit == "crop":
+        out = _crop_square_offset(im, offset).resize((size, size), Image.LANCZOS)
     else:
-        out = _fit_pad(im, size, size) if fit == "pad" else _fit_cover(im, size, size)
+        out = _fit_pad(im, size, size)
     buf = BytesIO()
     out.save(buf, "PNG")
     return buf.getvalue()
@@ -245,13 +263,24 @@ def _covers_dir(cache_dir: Path, mode: str = "icon") -> Path:
 
 
 def cached_cover(cache_dir: Path, key: str, mode: str = "icon",
-                 fit: str = "pad") -> str | None:
+                 fit: str = "pad", offset: float = 0.5) -> str | None:
     """Zwraca data-URI PRZETWORZONEJ miniatury (kwadrat/portret) z cache."""
     d = _covers_dir(cache_dir, mode)
     safe = _safe_key(key)
     for f in d.glob(safe + ".*"):
         try:
-            return _to_data_uri(make_display_thumb(f.read_bytes(), mode, fit))
+            return _to_data_uri(make_display_thumb(f.read_bytes(), mode, fit, offset))
+        except Exception:
+            return None
+    return None
+
+
+def raw_cover(cache_dir: Path, key: str, mode: str = "icon") -> str | None:
+    """Zwraca data-URI SUROWEGO obrazu z cache (do okienka kadrowania)."""
+    d = _covers_dir(cache_dir, mode)
+    for f in d.glob(_safe_key(key) + ".*"):
+        try:
+            return _to_data_uri(f.read_bytes())
         except Exception:
             return None
     return None

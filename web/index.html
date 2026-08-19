@@ -66,7 +66,35 @@
   <!-- Menu kontekstowe (prawy klik na karcie) -->
   <div id="ctxMenu" class="ctx" hidden>
     <button class="ctx-item" data-act="pick">🖼 Wybierz ikonę…</button>
+    <button class="ctx-item" data-act="crop">✂ Kadruj / ramki…</button>
     <button class="ctx-item" data-act="reset">↺ Przywróć automatyczną</button>
+  </div>
+
+  <!-- Okno kadrowania (pad/crop + pozycja) -->
+  <div id="cropModal" class="modal" hidden>
+    <div class="modal-box" style="width:min(560px,95vw);height:auto;max-height:92vh;resize:none">
+      <div class="modal-head">
+        <div class="modal-title" id="cropTitle">Kadrowanie</div>
+        <button class="btn ghost" id="cropClose">✕</button>
+      </div>
+      <div class="crop-body">
+        <canvas id="cropCanvas" width="256" height="256"></canvas>
+        <div class="crop-ctrl">
+          <div class="crop-modes">
+            <label><input type="radio" name="cropFit" value="pad" checked> Ramki (cała grafika)</label>
+            <label><input type="radio" name="cropFit" value="crop"> Kadruj (wypełnij)</label>
+          </div>
+          <div class="crop-off" id="cropOffRow">
+            <span class="muted">Pozycja kadru</span>
+            <input type="range" id="cropOffset" min="0" max="1" step="0.01" value="0.5">
+          </div>
+          <div class="crop-actions">
+            <button class="btn" id="cropSave">Zapisz</button>
+            <button class="btn ghost" id="cropResetBtn">Auto</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Okno wyboru okładki -->
