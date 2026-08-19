@@ -183,10 +183,15 @@ class Api:
         from pylinks.core import spine as _spine
         cfg = _load_config()
         res = _sr.scan_roms(cfg)
+        # mapa system → (emulator, launch_args) do budowy komendy przy eksporcie
+        sysmap = {s.get("name", ""): s for s in cfg.get("rom_support", {}).get("systems", [])}
         self._rom_games = []
         for s in res.get("systems", []):
+            sc = sysmap.get(s["name"], {})
             for g in s.get("games", []):
                 g["source"] = "rom"
+                g["emulator"] = sc.get("emulator", "")
+                g["launch_args"] = sc.get("launch_args", "")
                 self._rom_games.append(g)
         # grzbiety: globalny przełącznik + logo per system (data-URI)
         spine_on = bool(cfg.get("icon_platform_spine", False))
@@ -218,6 +223,27 @@ class Api:
         return [{"key": _game_key(g), "name": g["name"],
                  "system": g.get("system", ""), "path": g.get("path", "")}
                 for g in games]
+
+    # --- eksport skrótów (.lnk/.url + ikony .ico do LINKS/<platforma>/) ---
+    def export_pc(self, source: str = "") -> dict:
+        games = self._pc_games
+        if source:
+            games = [g for g in games if g.get("source") == source]
+        return self._export(games)
+
+    def export_rom(self, system: str = "") -> dict:
+        games = self._rom_games
+        if system:
+            games = [g for g in games if g.get("system") == system]
+        return self._export(games)
+
+    def _export(self, games: list) -> dict:
+        from pylinks.services import export as _exp
+        if not games:
+            return {"ok": False, "reason": "brak gier do eksportu", "created": 0}
+        res = _exp.export_games(_load_config(), games, CACHE_DIR, LINKS_DIR)
+        res["links_dir"] = str(LINKS_DIR)
+        return res
 
     # --- grafiki: dwa tryby "icon" (kwadrat) / "steam" (portret) ---
     def _raw_uri(self, key: str, mode: str):

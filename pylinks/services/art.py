@@ -225,28 +225,44 @@ def _crop_square_offset(im, offset: float):
     return im.crop((left, top, left + side, top + side))
 
 
-def make_display_thumb(data: bytes, mode: str = "icon",
-                       fit: str = "pad", offset: float = 0.5,
-                       size: int = 256) -> bytes:
-    """Zwraca PNG w docelowym kształcie: icon→kwadrat(size²), steam→portret(2:3).
-
-    Tryb ikon: fit="pad" = RAMKI (cała grafika + przezroczyste marginesy),
-    fit="crop" = KADROWANIE (przytnij dłuższy bok; pozycja = offset 0..1).
-    """
+def display_thumb_img(data: bytes, mode: str = "icon",
+                      fit: str = "pad", offset: float = 0.5, size: int = 256):
+    """Zwraca obraz PIL (RGBA) w docelowym kształcie albo None."""
     if not PIL_OK:
-        return data
+        return None
     try:
         im = Image.open(BytesIO(data)).convert("RGBA")
     except Exception:
-        return data
+        return None
     if _mode(mode) == "steam":
-        out = _fit_cover(im, size, round(size * 1.5))     # portret 2:3, wypełnij
-    elif fit == "crop":
-        out = _crop_square_offset(im, offset).resize((size, size), Image.LANCZOS)
-    else:
-        out = _fit_pad(im, size, size)
+        return _fit_cover(im, size, round(size * 1.5))    # portret 2:3
+    if fit == "crop":
+        return _crop_square_offset(im, offset).resize((size, size), Image.LANCZOS)
+    return _fit_pad(im, size, size)
+
+
+def make_display_thumb(data: bytes, mode: str = "icon",
+                       fit: str = "pad", offset: float = 0.5,
+                       size: int = 256) -> bytes:
+    """PNG w docelowym kształcie (opakowanie display_thumb_img)."""
+    out = display_thumb_img(data, mode, fit, offset, size)
+    if out is None:
+        return data
     buf = BytesIO()
     out.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def make_ico_bytes(square_img,
+                   sizes=(256, 128, 64, 48, 32, 16)) -> bytes:
+    """Kwadratowy obraz PIL → wielorozmiarowy .ico (maks 256, jak w oryginale)."""
+    img = square_img.convert("RGBA")
+    if img.size != (256, 256):
+        img = img.resize((256, 256), Image.LANCZOS)
+    frames = [img.resize((s, s), Image.LANCZOS) for s in sizes]
+    buf = BytesIO()
+    frames[0].save(buf, format="ICO", sizes=[(s, s) for s in sizes],
+                   append_images=frames[1:])
     return buf.getvalue()
 
 

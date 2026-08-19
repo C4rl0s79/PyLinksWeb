@@ -11,6 +11,7 @@ let FILTER   = "";      // filtr tekstowy nazwy
 let LOAD_TOK = 0;       // token anulowania leniwego ładowania okładek
 let FIT      = "pad";   // tryb dopasowania ikony (kwadrat): "pad" | "crop"
 let MODE     = "icon";  // tryb grafiki: "icon" (kwadrat) | "steam" (portret)
+let CURRENT_VIEW = null; // {type:"pc"|"rom", filter} — do eksportu
 
 function applyCardSize(px){
   document.documentElement.style.setProperty("--card-size", px + "px");
@@ -83,6 +84,7 @@ async function showLinks(name, node){
   clearActive(); node.classList.add("active");
   LOAD_TOK++;                       // anuluj ładowanie okładek PC
   el("filter").hidden = true;
+  el("btnExport").hidden = true;    // LINKS = gotowe skróty, nie eksportujemy
   el("gridTitle").textContent = "LINKS / " + name;
   const grid = el("grid");
   try{
@@ -147,6 +149,8 @@ function showRoms(system, node){
   el("gridTitle").textContent = "ROM / " + system;
   const games = ROM_GAMES.filter(g => g.system === system);
   el("gridSub").textContent = `${games.length} gier`;
+  CURRENT_VIEW = {type: "rom", filter: system};
+  el("btnExport").hidden = games.length === 0;
   const grid = el("grid"); grid.innerHTML = "";
   for (const g of games){
     const c = card(g.name, g.system, "rom", g);
@@ -184,6 +188,8 @@ function renderPC(){
   }
   el("gridTitle").textContent = CUR_SRC ? "PC / " + CUR_SRC.toUpperCase() : "Biblioteka PC";
   el("gridSub").textContent = `${games.length} gier` + (FILTER ? ` (filtr)` : "");
+  CURRENT_VIEW = {type: "pc", filter: CUR_SRC};
+  el("btnExport").hidden = games.length === 0;
   if (!games.length){ grid.innerHTML = `<div class="welcome muted">Brak gier.</div>`; return; }
   grid.innerHTML = "";
   for (const g of games) grid.appendChild(card(g.name, g.source, g.source, g));
@@ -626,6 +632,31 @@ el("btnPing").onclick = async () => {
   catch(e){ setBridge(false, e.message); }
 };
 el("btnSettings").onclick = () => alert("Ustawienia dojdą w Fazie 2.");
+el("btnExport").onclick = async () => {
+  if (!CURRENT_VIEW) return;
+  const what = CURRENT_VIEW.type === "rom"
+    ? `ROM / ${CURRENT_VIEW.filter}`
+    : (CURRENT_VIEW.filter ? "PC / " + CURRENT_VIEW.filter.toUpperCase() : "całej biblioteki PC");
+  if (!confirm(`Utworzyć skróty (.lnk/.url) z ikonami dla ${what}?\nTrafią do LINKS/<platforma>/.`)) return;
+  const b = el("btnExport"); const old = b.textContent;
+  b.disabled = true; b.textContent = "⏳ Tworzę…";
+  try{
+    const r = CURRENT_VIEW.type === "rom"
+      ? await api("export_rom", CURRENT_VIEW.filter)
+      : await api("export_pc", CURRENT_VIEW.filter || "");
+    if (r.ok){
+      let msg = `Utworzono ${r.created}/${r.total} skrótów w:\n${r.links_dir}`;
+      if (r.no_icon) msg += `\n(${r.no_icon} bez ikony — brak okładki)`;
+      if (r.failed && r.failed.length) msg += `\nNieudane: ${r.failed.slice(0,8).join(", ")}`;
+      if (!r.win32com) msg += `\nUWAGA: brak pywin32 — .lnk mogą się nie tworzyć.`;
+      alert(msg);
+      loadPlatforms();   // odśwież listę LINKS
+    }else{
+      alert("Eksport: " + (r.reason || "nie powiodło się"));
+    }
+  }catch(e){ alert("Błąd eksportu: " + e.message); }
+  finally{ b.disabled = false; b.textContent = old; }
+};
 el("btnFit").onclick = async () => {
   FIT = (FIT === "crop") ? "pad" : "crop";
   applyFit();
