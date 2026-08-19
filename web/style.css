@@ -79,8 +79,8 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 .filter:focus{border-color:var(--acc)}
 .grid{
   flex:1 1 auto; min-height:0; overflow-y:auto;      /* min-height:0 = warunek scrolla we flex */
-  display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
-  gap:14px; align-content:start; padding-right:6px;
+  display:grid; grid-template-columns:repeat(auto-fill, 160px);  /* STAŁY rozmiar karty (nie skaluje z oknem) */
+  gap:14px; align-content:start; justify-content:start; padding-right:6px;
 }
 .welcome{grid-column:1/-1;max-width:640px}
 .welcome p{margin:6px 0}

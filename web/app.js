@@ -84,6 +84,7 @@ async function showLinks(name, node){
     el("gridSub").textContent = `${games.length} skrótów`;
     grid.innerHTML = games.length ? "" : `<div class="welcome muted">Brak skrótów.</div>`;
     for (const g of games) grid.appendChild(card(g.name, g.platform, "extra"));
+    squareThumbs();
   }catch(e){ grid.innerHTML = `<div class="welcome muted">Błąd: ${e.message}</div>`; }
 }
 
@@ -127,8 +128,29 @@ function renderPC(){
   if (!games.length){ grid.innerHTML = `<div class="welcome muted">Brak gier.</div>`; return; }
   grid.innerHTML = "";
   for (const g of games) grid.appendChild(card(g.name, g.source, g.source, g));
+  squareThumbs();      // wymuś kwadrat/portret w JS (niezależnie od CSS engine)
   loadCovers(games);   // leniwe doczytanie okładek
 }
+
+// Gwarantowany kształt ramki miniatury w JS — aspect-ratio/::before bywają
+// ignorowane w niektórych wersjach WebView2. Ikony: kwadrat. Steam: portret 2:3.
+function squareThumbs(){
+  requestAnimationFrame(() => {
+    const ratio = (MODE === "steam") ? 1.5 : 1.0;
+    const thumbs = document.querySelectorAll("#grid .card .thumb");
+    let first = "";
+    thumbs.forEach((t, i) => {
+      const w = t.offsetWidth;
+      if (w){ t.style.height = Math.round(w * ratio) + "px";
+              if (i === 0) first = `${w}×${Math.round(w*ratio)}`; }
+    });
+    if (first){ const s = el("statBridge"); if (s) s.title = "thumb " + first; }
+  });
+}
+let _rsz;
+window.addEventListener("resize", () => {
+  clearTimeout(_rsz); _rsz = setTimeout(squareThumbs, 120);
+});
 
 function card(name, sub, src, game){
   const c = document.createElement("div");
