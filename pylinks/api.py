@@ -314,7 +314,11 @@ class Api:
             return {"key": key, "found": False, "data_uri": None,
                     "reason": "nieznana gra (najpierw skan)"}
         cfg = _load_config()
-        res = art.fetch_cover(cfg, CACHE_DIR, key, g, mode)
+        # ROM z grzbietem: preferuj portret (portret + grzbiet = kwadrat)
+        prefer_portrait = (g.get("source") == "rom"
+                           and mode != "steam"
+                           and bool(cfg.get("icon_platform_spine", False)))
+        res = art.fetch_cover(cfg, CACHE_DIR, key, g, mode, prefer_portrait)
         if res.get("found"):
             self._invalidate(key)               # świeżo pobrany raw
             fit, off = self._crop_for(key, cfg)

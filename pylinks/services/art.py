@@ -287,11 +287,13 @@ def raw_cover(cache_dir: Path, key: str, mode: str = "icon") -> str | None:
 
 
 def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict,
-                mode: str = "icon") -> dict:
+                mode: str = "icon", prefer_portrait: bool = False) -> dict:
     """Pobiera (lub czyta z cache) grafikę gry dla trybu.
 
     icon  → KWADRAT (kwadratowe gridy → ikony → portret jako ostateczność)
     steam → PORTRET (grid 600x900 → kwadrat jako ostateczność)
+    prefer_portrait (tryb ikon): portret najpierw — dla ROM-ów z grzbietem
+    (portret + pionowy grzbiet = kwadrat bez marginesów).
     """
     mode = _mode(mode)
     hit = raw_cover(cache_dir, key, mode)     # kształt robi CSS — zwracamy surowy
@@ -317,7 +319,7 @@ def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict,
         return (client.icons_for_appid(val) if kind_id == "appid"
                 else client.icons_for_id(val))
 
-    if mode == "steam":
+    if mode == "steam" or prefer_portrait:
         grids = _grids(_STEAM_DIMS) or _grids(_SQUARE_DIMS) or _icons()
     else:
         grids = _grids(_SQUARE_DIMS) or _icons() or _grids(_STEAM_DIMS)

@@ -225,12 +225,16 @@ function setCover(key, dataUri, fit, offset){
   if (!c) return;
   c.classList.remove("loading");
   if (!dataUri) return;
-  const old = c.querySelector("img"); if (old) old.remove();
+  const old = c.querySelector("img.cover"); if (old) old.remove();  // NIE ruszaj logo grzbietu
   const ph = c.querySelector(".ph"); if (ph) ph.style.display = "none";  // schowaj 🎮 pod okładką
   const img = document.createElement("img");
   img.className = "cover";
   img.alt = ""; styleCover(img, fit, offset); img.src = dataUri;
   c.insertBefore(img, ph);
+  // karta z grzbietem: plakat wypełnia wcięty obszar (portret + grzbiet = kwadrat)
+  if (c.classList.contains("spine-left") || c.classList.contains("spine-right")){
+    img.style.objectFit = "cover"; img.style.objectPosition = "center";
+  }
 }
 
 function restyleCover(key, fit, offset){
