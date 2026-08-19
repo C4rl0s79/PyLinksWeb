@@ -32,8 +32,10 @@ def _load_config() -> dict:
 
 
 def _game_key(g: dict) -> str:
-    """Stabilny klucz gry PC (do ikon/wyboru). Nie zależy od pozycji."""
+    """Stabilny klucz gry (do ikon/wyboru). Nie zależy od pozycji."""
     src = g.get("source", "pc")
+    if src == "rom":
+        return f"rom::{(g.get('system') or '').lower()}::{(g.get('name') or '').strip().lower()}"
     if g.get("appid"):
         return f"{src}::app::{g['appid']}"
     if g.get("gog_id"):
@@ -63,6 +65,7 @@ class Api:
         # ostatni wynik skanu PC (pełne wpisy z `content`) — do dalszych
         # operacji (ikony, eksport). Frontend dostaje odchudzoną wersję.
         self._pc_games: list[dict] = []
+        self._rom_games: list[dict] = []
         # cache upieczonych miniatur w RAM: (key,mode,fit,offset) → data-URI
         self._baked: dict = {}
 
@@ -168,7 +171,40 @@ class Api:
         for g in self._pc_games:
             if _game_key(g) == key:
                 return g
+        for g in self._rom_games:
+            if _game_key(g) == key:
+                return g
         return None
+
+    # --- skan ROM-ów (config.rom_support) ---
+    def scan_roms(self) -> dict:
+        """Skanuje systemy ROM i zwraca {enabled, systems:[{name,count,games}], total}."""
+        from pylinks.services import scan_roms as _sr
+        res = _sr.scan_roms(_load_config())
+        self._rom_games = []
+        for s in res.get("systems", []):
+            for g in s.get("games", []):
+                g["source"] = "rom"
+                self._rom_games.append(g)
+        # odchudzone wpisy z kluczem dla frontendu
+        out_sys = []
+        for s in res.get("systems", []):
+            out_sys.append({
+                "name": s["name"], "count": s["count"],
+                "games": [{"key": _game_key(dict(g, source="rom")),
+                           "name": g["name"], "system": g.get("system", ""),
+                           "path": g.get("path", "")} for g in s["games"]],
+            })
+        return {"enabled": res.get("enabled", False),
+                "total": res.get("total", 0), "systems": out_sys}
+
+    def get_rom_games(self, system: str = "") -> list:
+        games = self._rom_games
+        if system:
+            games = [g for g in games if g.get("system") == system]
+        return [{"key": _game_key(g), "name": g["name"],
+                 "system": g.get("system", ""), "path": g.get("path", "")}
+                for g in games]
 
     # --- grafiki: dwa tryby "icon" (kwadrat) / "steam" (portret) ---
     def _raw_uri(self, key: str, mode: str):
@@ -282,7 +318,7 @@ class Api:
             return {"key": key, "candidates": [], "reason": "nieznana gra"}
         cfg = _load_config()
         cands = art.candidates_for_game(cfg, g, query=query, mode=mode)
-        if mode != "steam" and not query:
+        if mode != "steam" and not query and g.get("source") != "rom":
             try:
                 from pylinks.services.extra_art import ExtraArtSources
                 extra = ExtraArtSources(cfg).candidates(

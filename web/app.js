@@ -112,6 +112,41 @@ async function runScan(){
   }catch(e){
     el("grid").innerHTML = `<div class="welcome muted">Błąd skanu: ${e.message}</div>`;
   }
+  scanRomsUI();   // skan ROM-ów w tle
+}
+
+// ── ROM-y ────────────────────────────────────────────────────────────────
+let ROM_GAMES = [];
+async function scanRomsUI(){
+  const box = el("romSystems");
+  try{
+    const r = await api("scan_roms");
+    if (!r.enabled){ box.innerHTML = `<div class="muted pad">wyłączone w configu</div>`; return; }
+    ROM_GAMES = [];
+    el("romTotal").textContent = r.total ? `(${r.total})` : "";
+    box.innerHTML = "";
+    for (const s of r.systems){
+      if (!s.count) continue;
+      ROM_GAMES.push(...s.games);
+      const b = document.createElement("button");
+      b.className = "plat-item";
+      b.innerHTML = `<span>${s.name}</span><span class="count">${s.count}</span>`;
+      b.onclick = () => showRoms(s.name, b);
+      box.appendChild(b);
+    }
+    if (!box.children.length) box.innerHTML = `<div class="muted pad">brak ROM-ów</div>`;
+  }catch(e){ box.innerHTML = `<div class="muted pad">Błąd: ${e.message}</div>`; }
+}
+
+function showRoms(system, node){
+  clearActive(); if (node) node.classList.add("active"); LOAD_TOK++;
+  el("filter").hidden = true;
+  el("gridTitle").textContent = "ROM / " + system;
+  const games = ROM_GAMES.filter(g => g.system === system);
+  el("gridSub").textContent = `${games.length} gier`;
+  const grid = el("grid"); grid.innerHTML = "";
+  for (const g of games) grid.appendChild(card(g.name, g.system, "rom", g));
+  loadCovers(games);
 }
 
 function updateCounts(counts, total){

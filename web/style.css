@@ -118,6 +118,7 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 }
 .src-steam{color:var(--acc)!important} .src-gog{color:var(--ext)!important}
 .src-epic{color:var(--yel)!important}  .src-extra{color:var(--orn)!important}
+.src-rom{color:var(--grn)!important}
 .card .cap{padding:8px 10px;font-size:12px;display:flex;flex-direction:column;gap:2px}
 .card .cap .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card .cap .p{color:var(--fg2);font-size:11px}
