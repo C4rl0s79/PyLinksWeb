@@ -8,6 +8,7 @@ const hasBridge = () => !!(window.pywebview && window.pywebview.api);
 let PC_GAMES = [];      // ostatni skan PC (odchudzone wpisy z backendu)
 let CUR_SRC  = "";      // aktywny filtr źródła ("" = wszystkie)
 let FILTER   = "";      // filtr tekstowy nazwy
+let LOAD_TOK = 0;       // token anulowania leniwego ładowania okładek
 
 function setBridge(ok, txt){
   const b = el("statBridge");
@@ -61,6 +62,7 @@ async function loadPlatforms(){
 
 async function showLinks(name, node){
   clearActive(); node.classList.add("active");
+  LOAD_TOK++;                       // anuluj ładowanie okładek PC
   el("filter").hidden = true;
   el("gridTitle").textContent = "LINKS / " + name;
   const grid = el("grid");
@@ -74,7 +76,7 @@ async function showLinks(name, node){
 
 // ── skan PC (Steam/GOG/Epic/Extra) ─────────────────────────────────────────
 async function runScan(){
-  clearActive();
+  clearActive(); LOAD_TOK++;         // anuluj poprzednie ładowanie okładek
   document.querySelector('.src[data-src=""]').classList.add("active");
   CUR_SRC = "";
   el("gridTitle").textContent = "Biblioteka PC";
@@ -112,16 +114,55 @@ function renderPC(){
   if (!games.length){ grid.innerHTML = `<div class="welcome muted">Brak gier.</div>`; return; }
   grid.innerHTML = "";
   for (const g of games) grid.appendChild(card(g.name, g.source, g.source, g));
+  loadCovers(games);   // leniwe doczytanie okładek
 }
 
 function card(name, sub, src, game){
   const c = document.createElement("div");
   c.className = "card";
+  if (game && game.key) c.dataset.key = game.key;
   c.title = (game && game.game_dir) ? game.game_dir : name;
   c.innerHTML =
-    `<div class="thumb"><span class="src src-${src}">${src}</span>🎮</div>
+    `<div class="thumb"><span class="src src-${src}">${src}</span><span class="ph">🎮</span></div>
      <div class="cap"><span class="t">${name}</span><span class="p">${sub}</span></div>`;
   return c;
+}
+
+function setCover(key, dataUri){
+  const c = document.querySelector(`.card[data-key="${cssEsc(key)}"] .thumb`);
+  if (!c) return;
+  c.classList.remove("loading");
+  if (!dataUri) return;
+  const img = document.createElement("img");
+  img.src = dataUri; img.alt = "";
+  c.insertBefore(img, c.querySelector(".ph"));
+}
+const cssEsc = (s) => (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/"/g,'\\"');
+
+// Najpierw szybki cache dyskowy dla wszystkich, potem sieć dla brakujących.
+// Token LOAD_TOK anuluje ładowanie, gdy widok się zmieni (filtr/źródło/skan).
+async function loadCovers(games){
+  const tok = ++LOAD_TOK;
+  const missing = [];
+  for (const g of games){
+    if (!g.key) continue;
+    try{
+      const r = await api("cover_cached", g.key);
+      if (tok !== LOAD_TOK) return;
+      if (r.found) setCover(g.key, r.data_uri);
+      else missing.push(g);
+    }catch(e){ /* brak mostu / błąd — pomiń */ }
+  }
+  for (const g of missing){
+    if (tok !== LOAD_TOK) return;
+    const c = document.querySelector(`.card[data-key="${cssEsc(g.key)}"] .thumb`);
+    if (c) c.classList.add("loading");
+    try{
+      const r = await api("fetch_cover", g.key);
+      if (tok !== LOAD_TOK) return;
+      setCover(g.key, r.found ? r.data_uri : null);
+    }catch(e){ if (c) c.classList.remove("loading"); }
+  }
 }
 
 function clearActive(){

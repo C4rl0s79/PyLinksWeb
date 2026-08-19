@@ -18,7 +18,7 @@ from pylinks.constants import C
 from pylinks.config.defaults import _default_config
 from pylinks.config.migrate import migrate_config
 from pylinks.roms.presets import ROM_SYSTEM_PRESETS
-from pylinks.services import scan_pc
+from pylinks.services import scan_pc, art
 
 
 def _load_config() -> dict:
@@ -152,6 +152,27 @@ class Api:
         if source:
             games = [g for g in games if g.get("source") == source]
         return [_slim_game(g) for g in games]
+
+    def _find_game(self, key: str) -> dict | None:
+        for g in self._pc_games:
+            if _game_key(g) == key:
+                return g
+        return None
+
+    # --- okładki (SteamGridDB + cache dyskowy) ---
+    def cover_cached(self, key: str) -> dict:
+        """Szybki odczyt okładki z cache dyskowego (bez sieci)."""
+        uri = art.cached_cover(CACHE_DIR, key)
+        return {"key": key, "found": bool(uri), "data_uri": uri, "cached": True}
+
+    def fetch_cover(self, key: str) -> dict:
+        """Pobiera okładkę z SGDB (lub czyta z cache). Może ruszyć sieć."""
+        g = self._find_game(key)
+        if not g:
+            return {"key": key, "found": False, "data_uri": None,
+                    "reason": "nieznana gra (najpierw skan)"}
+        cfg = _load_config()
+        return art.fetch_cover(cfg, CACHE_DIR, key, g)
 
     # --- config ---
     def get_config(self) -> dict:
