@@ -4,8 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PyLinks</title>
-  <!-- cache-busting: WebView2 potrafi trzymać stary CSS/JS mimo restartu -->
-  <script>document.write('<link rel="stylesheet" href="style.css?v='+Date.now()+'">');</script>
+  <!-- cache-busting: WebView2 potrafi trzymać stary CSS mimo restartu -->
+  <script>
+    (function(){
+      var l = document.createElement('link');
+      l.rel = 'stylesheet';
+      l.href = 'style.css?v=' + Date.now();
+      document.head.appendChild(l);
+    })();
+  </script>
 </head>
 <body>
   <header class="topbar">
@@ -92,6 +99,12 @@
     </div>
   </div>
 
-  <script>document.write('<scr'+'ipt src="app.js?v='+Date.now()+'"></scr'+'ipt>');</script>
+  <script>
+    (function(){
+      var s = document.createElement('script');
+      s.src = 'app.js?v=' + Date.now();
+      document.body.appendChild(s);
+    })();
+  </script>
 </body>
 </html>

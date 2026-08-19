@@ -10,8 +10,17 @@ Uruchomienie:
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
+
+# WAŻNE: ustaw PRZED importem webview. WebView2 potrafi trzymać stary CSS/JS
+# w cache mimo restartu (nawigacja do index.html jest świeża, ale podzasoby
+# style.css/app.js są serwowane z cache) — wyłączamy cache HTTP na twardo.
+os.environ.setdefault(
+    "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+    "--disable-http-cache --disk-cache-size=1",
+)
 
 import webview
 
