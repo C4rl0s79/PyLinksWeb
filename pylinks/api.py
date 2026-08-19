@@ -295,6 +295,13 @@ class Api:
             games = [g for g in games if g.get("system") == system]
         return self._export(games)
 
+    def export_keys(self, keys: list) -> dict:
+        """Eksportuje tylko wskazane gry (po kluczach)."""
+        want = set(keys or [])
+        games = [g for g in (self._pc_games + self._rom_games)
+                 if _game_key(g) in want]
+        return self._export(games)
+
     def _export(self, games: list) -> dict:
         from pylinks.services import export as _exp
         if not games:
@@ -303,6 +310,22 @@ class Api:
         _ICON_URI_CACHE.clear()          # świeże ikony w widoku LINKS po eksporcie
         res["links_dir"] = str(LINKS_DIR)
         return res
+
+    def missing_keys(self, kind: str = "pc", filt: str = "") -> list:
+        """Klucze gier BEZ istniejącego skrótu w LINKS/<platforma>/."""
+        from pylinks.core.naming import safe_name
+        if kind == "rom":
+            games = [g for g in self._rom_games if not filt or g.get("system") == filt]
+        else:
+            games = [g for g in self._pc_games if not filt or g.get("source") == filt]
+        out = []
+        for g in games:
+            plat = g.get("system", "") if g.get("source") == "rom" else "PC"
+            d = LINKS_DIR / plat
+            safe = safe_name(g.get("name", ""))
+            if not ((d / (safe + ".lnk")).exists() or (d / (safe + ".url")).exists()):
+                out.append(_game_key(g))
+        return out
 
     # --- grafiki: dwa tryby "icon" (kwadrat) / "steam" (portret) ---
     def _raw_uri(self, key: str, mode: str):

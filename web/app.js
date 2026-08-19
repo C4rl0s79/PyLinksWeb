@@ -85,6 +85,7 @@ async function showLinks(name, node){
   LOAD_TOK++;                       // anuluj ładowanie okładek PC
   el("filter").hidden = true;
   el("btnExport").hidden = true;    // LINKS = gotowe skróty, nie eksportujemy
+  el("selbar").hidden = true;
   el("gridTitle").textContent = "LINKS / " + name;
   const grid = el("grid");
   try{
@@ -160,12 +161,15 @@ function showRoms(system, node){
   el("gridSub").textContent = `${games.length} gier`;
   CURRENT_VIEW = {type: "rom", filter: system};
   el("btnExport").hidden = games.length === 0;
+  el("selbar").hidden = games.length === 0;
+  SELECTED = new Set(games.map(g => g.key));   // domyślnie wszystkie
   const grid = el("grid"); grid.innerHTML = "";
   for (const g of games){
     const c = card(g.name, g.system, "rom", g);
     if (SPINE.enabled && SYS_LOGO[g.system]) addSpine(c, SYS_LOGO[g.system], SPINE.side);
     grid.appendChild(c);
   }
+  updateSelCount();
   loadCovers(games);
 }
 
@@ -199,25 +203,55 @@ function renderPC(){
   el("gridSub").textContent = `${games.length} gier` + (FILTER ? ` (filtr)` : "");
   CURRENT_VIEW = {type: "pc", filter: CUR_SRC};
   el("btnExport").hidden = games.length === 0;
+  el("selbar").hidden = games.length === 0;
   if (!games.length){ grid.innerHTML = `<div class="welcome muted">Brak gier.</div>`; return; }
+  SELECTED = new Set(games.map(g => g.key));   // domyślnie wszystkie
   grid.innerHTML = "";
   for (const g of games) grid.appendChild(card(g.name, g.source, g.source, g));
+  updateSelCount();
   loadCovers(games);   // leniwe doczytanie okładek (miniatury upieczone na kwadrat/portret w PIL)
 }
 
 function card(name, sub, src, game){
   const c = document.createElement("div");
   c.className = "card";
-  if (game && game.key){
+  const hasKey = !!(game && game.key);
+  if (hasKey){
     c.dataset.key = game.key;
-    c.onclick = () => openPicker(game);
+    if (SELECTED.has(game.key)) c.classList.add("sel");
+    c.onclick = (e) => { if (!e.target.closest(".pick")) toggleSel(game.key, c); };
     c.oncontextmenu = (e) => { e.preventDefault(); showCtx(e.clientX, e.clientY, game); };
   }
   c.title = (game && game.game_dir) ? game.game_dir : name;
   c.innerHTML =
-    `<div class="thumb"><span class="src src-${src}">${src}</span><span class="ph">🎮</span></div>
+    `<div class="thumb">${hasKey ? '<span class="pick" title="Zaznacz do eksportu">✓</span>' : ''}` +
+    `<span class="src src-${src}">${src}</span><span class="ph">🎮</span></div>
      <div class="cap"><span class="t">${name}</span><span class="p">${sub}</span></div>`;
+  if (hasKey){
+    const pk = c.querySelector(".pick");
+    if (pk) pk.onclick = (e) => { e.stopPropagation(); toggleSel(game.key, c); };
+  }
   return c;
+}
+
+// ── zaznaczanie do eksportu ─────────────────────────────────────────────────
+let SELECTED = new Set();
+function toggleSel(key, cardEl){
+  if (SELECTED.has(key)){ SELECTED.delete(key); cardEl.classList.remove("sel"); }
+  else { SELECTED.add(key); cardEl.classList.add("sel"); }
+  updateSelCount();
+}
+function selectKeys(keys){
+  SELECTED = new Set(keys);
+  document.querySelectorAll("#grid .card[data-key]").forEach(c =>
+    c.classList.toggle("sel", SELECTED.has(c.dataset.key)));
+  updateSelCount();
+}
+function currentKeys(){
+  return [...document.querySelectorAll("#grid .card[data-key]")].map(c => c.dataset.key);
+}
+function updateSelCount(){
+  el("selCount").textContent = `zaznaczono ${SELECTED.size}`;
 }
 
 // Kształt robi CSS: pad = contain, crop = cover + object-position (offset).
@@ -641,18 +675,27 @@ el("btnPing").onclick = async () => {
   catch(e){ setBridge(false, e.message); }
 };
 el("btnSettings").onclick = () => alert("Ustawienia dojdą w Fazie 2.");
+el("selAll").onclick = () => selectKeys(currentKeys());
+el("selNone").onclick = () => selectKeys([]);
+el("selMissing").onclick = async () => {
+  if (!CURRENT_VIEW) return;
+  try{
+    const keys = await api("missing_keys", CURRENT_VIEW.type,
+                           CURRENT_VIEW.filter || "");
+    // zaznacz tylko brakujące, które są w bieżącym widoku
+    const inView = new Set(currentKeys());
+    selectKeys((keys || []).filter(k => inView.has(k)));
+  }catch(e){ alert("Błąd: " + e.message); }
+};
+
 el("btnExport").onclick = async () => {
   if (!CURRENT_VIEW) return;
-  const what = CURRENT_VIEW.type === "rom"
-    ? `ROM / ${CURRENT_VIEW.filter}`
-    : (CURRENT_VIEW.filter ? "PC / " + CURRENT_VIEW.filter.toUpperCase() : "całej biblioteki PC");
-  if (!confirm(`Utworzyć skróty (.lnk/.url) z ikonami dla ${what}?\nTrafią do LINKS/<platforma>/.`)) return;
+  if (SELECTED.size === 0){ alert("Nie zaznaczono żadnej gry."); return; }
+  if (!confirm(`Utworzyć skróty (.lnk/.url) z ikonami dla ${SELECTED.size} zaznaczonych gier?\nTrafią do LINKS/<platforma>/.`)) return;
   const b = el("btnExport"); const old = b.textContent;
   b.disabled = true; b.textContent = "⏳ Tworzę…";
   try{
-    const r = CURRENT_VIEW.type === "rom"
-      ? await api("export_rom", CURRENT_VIEW.filter)
-      : await api("export_pc", CURRENT_VIEW.filter || "");
+    const r = await api("export_keys", [...SELECTED]);
     if (r.ok){
       let msg = `Utworzono ${r.created}/${r.total} skrótów w:\n${r.links_dir}`;
       if (r.no_icon) msg += `\n(${r.no_icon} bez ikony — brak okładki)`;

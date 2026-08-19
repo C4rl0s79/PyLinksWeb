@@ -74,6 +74,23 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 .content{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;padding:16px 20px}
 .content-head{display:flex;align-items:center;gap:12px;margin-bottom:12px}
 .content-head h1{font-size:20px;margin:0}
+.selbar{display:flex;align-items:center;gap:6px;margin-left:12px}
+.selbar[hidden]{display:none}
+.chip{
+  background:var(--bg3); color:var(--fg); border:0; cursor:pointer;
+  padding:5px 10px; border-radius:999px; font-size:12px;
+}
+.chip:hover{background:#45475a}
+#selCount{font-size:12px;margin-left:4px}
+/* checkbox zaznaczenia na karcie */
+.card .pick{
+  position:absolute; top:6px; right:6px; z-index:4; width:20px; height:20px;
+  border-radius:5px; border:2px solid rgba(255,255,255,.6); background:rgba(17,17,27,.55);
+  cursor:pointer; display:flex; align-items:center; justify-content:center;
+  font-size:13px; color:transparent; line-height:1;
+}
+.card.sel .pick{background:var(--grn); border-color:var(--grn); color:#11111b}
+.card.sel{outline:2px solid var(--grn); outline-offset:-2px}
 .filter{
   margin-left:auto; min-width:220px;
   background:var(--bg2); color:var(--fg); border:1px solid var(--bg3);
