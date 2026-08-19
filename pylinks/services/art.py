@@ -414,8 +414,10 @@ def candidates_for_game(cfg: dict, game: dict, query: str = "",
         return (client.icons_for_appid(val) if kind_id == "appid"
                 else client.icons_for_id(val))
 
-    # ikony + kwadraty + POSTERY (postery to opcja, ale po kwadratach)
+    # ikony + kwadraty + POSTERY. Każdy rodzaj ma WŁASNĄ pulę, żeby dużo ikon
+    # nie wypychało kwadratów/plakatów (picker się przewija, więc jest miejsce).
     kind_prio = {"ikona": 0, "kwadrat": 1, "plakat": 2}
+    kind_cap = {"ikona": 30, "kwadrat": 24, "plakat": 24}
     groups = [("ikona", _icons()),
               ("kwadrat", _grids(_SQUARE_DIMS)),
               ("plakat", _grids(_STEAM_DIMS))]
@@ -424,7 +426,10 @@ def candidates_for_game(cfg: dict, game: dict, query: str = "",
     seen: set[str] = set()
     out: list[dict] = []
     for kind, items in groups:
+        got = 0
         for it in items:
+            if got >= kind_cap.get(kind, 24):
+                break
             i = str(it.get("id", ""))
             if not i or i in seen:
                 continue
@@ -441,6 +446,7 @@ def candidates_for_game(cfg: dict, game: dict, query: str = "",
                     w, h = Image.open(BytesIO(data)).size
                 except Exception:
                     pass
+            got += 1
             out.append({
                 "id": i, "url": it.get("url", ""), "thumb": _to_data_uri(data),
                 "w": w, "h": h, "style": (it.get("style") or ""),
@@ -451,7 +457,7 @@ def candidates_for_game(cfg: dict, game: dict, query: str = "",
     # sort: najpierw rodzaj (ikona→kwadrat→plakat), w obrębie rodzaju duże pierwsze
     out.sort(key=lambda c: (kind_prio.get(c["kind"], 9),
                             -(min(c["w"], c["h"]) if (c["w"] and c["h"]) else 0)))
-    return out[:limit]
+    return out
 
 
 # ── tryb Steam: kilka typów grafik (grid + hero/tło + logo) ────────────────
