@@ -224,8 +224,26 @@ document.addEventListener("scroll", () => hideCtx(), true);
 let PK_GAME = null;     // gra, dla której otwarto wybór
 let PK_TOK  = 0;        // token anulowania ładowania kandydatów
 
+// zapamiętany rozmiar modala (localStorage) — dotyczy każdego wyskakującego okna
+function restoreModalSize(){
+  const box = document.querySelector("#picker .modal-box");
+  if (!box) return;
+  try{
+    const s = JSON.parse(localStorage.getItem("pk_modal_size") || "null");
+    if (s && s.w && s.h){ box.style.width = s.w + "px"; box.style.height = s.h + "px"; }
+  }catch(_){}
+  if (!box._ro){
+    box._ro = new ResizeObserver(() => {
+      try{ localStorage.setItem("pk_modal_size",
+        JSON.stringify({w: box.offsetWidth, h: box.offsetHeight})); }catch(_){}
+    });
+    box._ro.observe(box);
+  }
+}
+
 function openPicker(game){
   PK_GAME = game;
+  restoreModalSize();
   el("pkTitle").textContent = (MODE === "steam" ? "Grafiki Steam: " : "Ikona: ") + game.name;
   el("pkSub").textContent = (MODE === "steam"
     ? "wybierz grid / tło / logo"
@@ -238,8 +256,10 @@ function openPicker(game){
 }
 function closePicker(){ el("picker").hidden = true; PK_GAME = null; PK_TOK++; hideSuggest(); }
 
+let PK_QUERY = "";      // ostatnie zapytanie (do przycisku Odśwież)
 async function pkLoad(query){
   if (!PK_GAME) return;
+  PK_QUERY = query || "";
   const tok = ++PK_TOK;
   const box = el("pkGrid");
   box.innerHTML = `<div class="pk-loading"><div class="spin"></div>Szukam grafik…</div>`;
@@ -289,7 +309,7 @@ function renderSteamOptions(opt){
         const dims = (v.w && v.h) ? `${v.w}×${v.h}` : "";
         it.title = `${dims} ${v.style||""}`.trim();
         if (cur[asset] && cur[asset] === v.url) it.classList.add("chosen");
-        it.innerHTML = `<img src="${v.thumb}" alt="">${dims?`<div class="meta">${dims}</div>`:""}`;
+        it.innerHTML = `<img src="${v.thumb}" alt="" onerror="this.closest('.pk-item').classList.add('broken')">${dims?`<div class="meta">${dims}</div>`:""}`;
         it.onclick = () => chooseSteamAsset(asset, v.url, it);
         row.appendChild(it);
       }
@@ -337,7 +357,7 @@ function renderCandidates(r){
     const dims = (c.w && c.h) ? `${c.w}×${c.h}` : "";
     it.title = `${c.kind||""} ${dims} ${c.style||""}`.replace(/\s+/g," ").trim();
     it.innerHTML =
-      `<img src="${c.thumb}" alt="">
+      `<img src="${c.thumb}" alt="" onerror="this.closest('.pk-item').classList.add('broken')">
        <div class="meta"><span class="kind kind-${c.kind||""}">${c.kind||""}</span>${dims?" "+dims:""}</div>`;
     it.onclick = () => chooseCover(c.url);
     box.appendChild(it);
@@ -434,6 +454,7 @@ function moveSuggest(delta){
 }
 
 el("pkClose").onclick = closePicker;
+el("pkReload").onclick = () => { hideSuggest(); pkLoad(PK_QUERY); };
 el("pkSearch").onclick = () => { hideSuggest(); pkLoad(el("pkQuery").value.trim()); };
 el("pkQuery").addEventListener("input", (e) => {
   clearTimeout(SUG_TIMER);

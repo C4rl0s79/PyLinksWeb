@@ -68,7 +68,7 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 .plat-item.active .count{background:rgba(30,30,46,.25);color:var(--bg)}
 
 /* ── Content ── */
-.content{flex:1;min-width:0;display:flex;flex-direction:column;padding:16px 20px}
+.content{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;padding:16px 20px}
 .content-head{display:flex;align-items:center;gap:12px;margin-bottom:12px}
 .content-head h1{font-size:20px;margin:0}
 .filter{
@@ -78,7 +78,7 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 }
 .filter:focus{border-color:var(--acc)}
 .grid{
-  flex:1; overflow-y:auto;
+  flex:1 1 auto; min-height:0; overflow-y:auto;      /* min-height:0 = warunek scrolla we flex */
   display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
   gap:14px; align-content:start; padding-right:6px;
 }
@@ -155,10 +155,13 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 }
 .modal[hidden]{display:none}
 .modal-box{
-  width:min(920px,95vw); max-height:88vh; display:flex; flex-direction:column;
+  width:min(920px,95vw); height:82vh; max-height:92vh; min-width:420px; min-height:320px;
+  display:flex; flex-direction:column;
   background:var(--bg); border:1px solid var(--bg3); border-radius:14px;
   box-shadow:0 20px 60px rgba(0,0,0,.5); overflow:hidden;
+  resize:both;                       /* zmienialny rozmiar; zapamiętywany w localStorage */
 }
+.modal-head,.modal-search{flex:0 0 auto}
 .modal-head{
   display:flex; align-items:center; justify-content:space-between; gap:12px;
   padding:14px 18px; background:var(--bg2); border-bottom:1px solid var(--bg3);
@@ -186,7 +189,8 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 .pk-sug:hover,.pk-sug.active{background:var(--bg3)}
 .pk-sug .yr{color:var(--fg2); font-size:11px; margin-left:auto}
 .pk-grid{
-  overflow-y:auto; padding:16px 18px; display:grid; gap:12px;
+  flex:1 1 auto; min-height:0; overflow-y:auto;      /* scroll siatki kandydatów */
+  padding:16px 18px; display:grid; gap:12px;
   grid-template-columns:repeat(auto-fill,minmax(130px,1fr));
 }
 .pk-item{
@@ -205,6 +209,7 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 }
 .pk-item.chosen{border-color:var(--grn)}
 .pk-item.busy{opacity:.5}
+.pk-item.broken{display:none}   /* nie pokazuj pustych ramek — użyj ↻ Odśwież */
 
 /* ── tryb Steam: sekcje typów (grid / hero / logo) ── */
 .pk-grid.steam{display:block}

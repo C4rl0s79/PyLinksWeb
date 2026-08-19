@@ -15,7 +15,14 @@ import base64
 import json
 import re
 import urllib.request
+from io import BytesIO
 from pathlib import Path
+
+try:
+    from PIL import Image
+    PIL_OK = True
+except Exception:
+    PIL_OK = False
 
 # DWA TRYBY grafiki (jak w starej wersji):
 #   "icon"  → skróty .lnk z własną ikoną = KWADRAT
@@ -310,19 +317,16 @@ def _resolve_ref(client: SgdbClient, game: dict, query: str):
 
 
 def candidates_for_game(cfg: dict, game: dict, query: str = "",
-                        mode: str = "icon", limit: int = 24) -> list[dict]:
-    """Lista kandydatów do okna wyboru — zależnie od trybu.
-
-    icon  → IKONY + KWADRATY (plakat tylko jako zapas, gdy brak kwadratów)
-    steam → PLAKATY (portret 600x900); kwadraty jako zapas.
-    Kolejność źródeł = kolejność wyświetlania. Bez landscape (wide 920x430).
+                        mode: str = "icon", limit: int = 40) -> list[dict]:
+    """Kandydaci do okna wyboru IKONY (kwadrat) — jak w oryginale:
+    źródło = endpoint /icons + kwadratowe gridy 512/1024, POSORTOWANE MALEJĄCO
+    po realnej rozdzielczości (duże pierwsze). Bez plakatów/landscape.
+    Plakat dochodzi tylko jako ostateczność, gdy nie ma nic kwadratowego.
     Każdy kandydat: {id, url, thumb (data-URI), w, h, style, kind, square}.
     """
-    mode = _mode(mode)
     client = SgdbClient((cfg.get("api_keys", {}) or {}).get("sgdb_key", ""))
     if not client.ok:
         return []
-
     ref = _resolve_ref(client, game, query)
     if not ref:
         return []
@@ -337,46 +341,42 @@ def candidates_for_game(cfg: dict, game: dict, query: str = "",
         return (client.icons_for_appid(val) if kind_id == "appid"
                 else client.icons_for_id(val))
 
-    if mode == "steam":
-        # portret na pierwszym miejscu, kwadrat jako alternatywa
-        groups = (("plakat", _grids(_STEAM_DIMS)),
-                  ("kwadrat", _grids(_SQUARE_DIMS)))
-    else:
-        groups = (("ikona", _icons()),
-                  ("kwadrat", _grids(_SQUARE_DIMS)),
-                  ("plakat", _grids(_STEAM_DIMS)))
+    groups = [("ikona", _icons()), ("kwadrat", _grids(_SQUARE_DIMS))]
+    if not any(items for _, items in groups):     # ostateczność: brak kwadratów
+        groups.append(("plakat", _grids(_STEAM_DIMS)))
 
-    merged: list[tuple[str, dict]] = []
+    # zbierz unikaty, pobierz miniatury, ZMIERZ realny rozmiar (PIL) → sort desc
     seen: set[str] = set()
+    out: list[dict] = []
     for kind, items in groups:
         for it in items:
             i = str(it.get("id", ""))
             if not i or i in seen:
                 continue
             seen.add(i)
-            merged.append((kind, it))
-
-    out: list[dict] = []
-    for kind, g in merged[:limit]:
-        thumb_url = g.get("thumb") or g.get("url")
-        if not thumb_url:
-            continue
-        data = fetch(thumb_url)
-        if not data:
-            continue
-        w, h = g.get("width", 0) or 0, g.get("height", 0) or 0
-        is_sq = (kind in ("ikona", "kwadrat")) or bool(
-            w and h and abs(int(w) - int(h)) <= 2)
-        out.append({
-            "id": str(g.get("id", "")),
-            "url": g.get("url", ""),
-            "thumb": _to_data_uri(data),
-            "w": w, "h": h,
-            "style": (g.get("style") or ""),
-            "kind": kind,
-            "square": is_sq,
-        })
-    return out
+            thumb_url = it.get("thumb") or it.get("url")
+            if not thumb_url:
+                continue
+            data = fetch(thumb_url)
+            if not data:
+                continue
+            w, h = it.get("width", 0) or 0, it.get("height", 0) or 0
+            if PIL_OK:
+                try:
+                    w, h = Image.open(BytesIO(data)).size
+                except Exception:
+                    pass
+            out.append({
+                "id": i, "url": it.get("url", ""), "thumb": _to_data_uri(data),
+                "w": w, "h": h, "style": (it.get("style") or ""),
+                "kind": kind,
+                "square": (kind in ("ikona", "kwadrat")) or bool(
+                    w and h and abs(int(w) - int(h)) <= 2),
+            })
+    # duże pierwsze (min(w,h) malejąco); ikony bez wymiarów lądują wg kolejności API
+    out.sort(key=lambda c: min(c["w"], c["h"]) if (c["w"] and c["h"]) else 0,
+             reverse=True)
+    return out[:limit]
 
 
 # ── tryb Steam: kilka typów grafik (grid + hero/tło + logo) ────────────────
@@ -417,7 +417,7 @@ def cached_steam_asset(cache_dir: Path, key: str, asset: str) -> str | None:
 
 
 def steam_art_options(cfg: dict, game: dict, query: str = "",
-                      limit: int = 12) -> dict:
+                      limit: int = 20) -> dict:
     """Wszystkie warianty grafik Steam naraz: grid (okładka), hero (tło), logo.
 
     Zwraca {"ok", "sgdb_id", "grid":[...], "hero":[...], "logo":[...]}.
