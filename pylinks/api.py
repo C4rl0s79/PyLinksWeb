@@ -161,8 +161,10 @@ class Api:
 
     # --- grafiki: dwa tryby "icon" (kwadrat) / "steam" (portret) ---
     def cover_cached(self, key: str, mode: str = "icon") -> dict:
-        """Szybki odczyt grafiki z cache dyskowego danego trybu (bez sieci)."""
-        uri = art.cached_cover(CACHE_DIR, key, mode)
+        """Szybki odczyt grafiki z cache dyskowego danego trybu (bez sieci).
+        Zwraca PRZETWORZONĄ miniaturę (kwadrat/portret) — kształt upieczony w PIL."""
+        fit = _load_config().get("icon_fit_mode", "pad")
+        uri = art.cached_cover(CACHE_DIR, key, mode, fit)
         return {"key": key, "found": bool(uri), "data_uri": uri, "cached": True}
 
     def fetch_cover(self, key: str, mode: str = "icon") -> dict:

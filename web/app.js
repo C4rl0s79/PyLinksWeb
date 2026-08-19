@@ -512,6 +512,7 @@ el("btnFit").onclick = async () => {
   FIT = (FIT === "crop") ? "pad" : "crop";
   applyFit();
   try{ await api("set_fit_mode", FIT); }catch(_){}
+  if (PC_GAMES.length) renderPC();   // przepiecz miniatury (pad/crop robione w PIL)
 };
 el("btnMode").onclick = () => {
   MODE = (MODE === "steam") ? "icon" : "steam";

@@ -189,6 +189,49 @@ def _to_data_uri(data: bytes) -> str:
     return f"data:{m};base64,{base64.b64encode(data).decode('ascii')}"
 
 
+# ── pieczenie miniatury do wyświetlenia (jak w oryginale: gotowy kształt) ──
+# Zamiast liczyć na CSS (aspect-ratio bywa ignorowane w WebView2), zwracamy
+# obrazek już w docelowym kształcie: ikony = KWADRAT (pad/crop), Steam = PORTRET.
+def _fit_pad(im, tw, th):
+    """Skaluje z zachowaniem proporcji i wkleja wyśrodkowany na przezroczyste tło."""
+    src = im.copy()
+    src.thumbnail((tw, th), Image.LANCZOS)
+    canvas = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
+    canvas.paste(src, ((tw - src.width) // 2, (th - src.height) // 2), src)
+    return canvas
+
+
+def _fit_cover(im, tw, th):
+    """Skaluje tak, by wypełnić (tw,th), i przycina do środka."""
+    scale = max(tw / im.width, th / im.height)
+    nw, nh = max(1, round(im.width * scale)), max(1, round(im.height * scale))
+    src = im.resize((nw, nh), Image.LANCZOS)
+    left, top = (nw - tw) // 2, (nh - th) // 2
+    return src.crop((left, top, left + tw, top + th))
+
+
+def make_display_thumb(data: bytes, mode: str = "icon",
+                       fit: str = "pad", size: int = 256) -> bytes:
+    """Zwraca PNG w docelowym kształcie: icon→kwadrat(size²), steam→portret(2:3).
+
+    fit dotyczy tylko trybu ikon: "pad" = cała grafika + przezroczyste marginesy,
+    "crop" = wypełnia kwadrat, brzegi przycięte.
+    """
+    if not PIL_OK:
+        return data
+    try:
+        im = Image.open(BytesIO(data)).convert("RGBA")
+    except Exception:
+        return data
+    if _mode(mode) == "steam":
+        out = _fit_cover(im, size, round(size * 1.5))     # portret 2:3, wypełnij
+    else:
+        out = _fit_pad(im, size, size) if fit == "pad" else _fit_cover(im, size, size)
+    buf = BytesIO()
+    out.save(buf, "PNG")
+    return buf.getvalue()
+
+
 # ── okładka dla gry (z cache dyskowym, per tryb) ───────────────────────────
 def _mode(mode: str) -> str:
     return "steam" if str(mode).lower() == "steam" else "icon"
@@ -201,13 +244,14 @@ def _covers_dir(cache_dir: Path, mode: str = "icon") -> Path:
     return d
 
 
-def cached_cover(cache_dir: Path, key: str, mode: str = "icon") -> str | None:
-    """Zwraca data-URI z cache dyskowego (dla danego trybu), jeśli pobrane."""
+def cached_cover(cache_dir: Path, key: str, mode: str = "icon",
+                 fit: str = "pad") -> str | None:
+    """Zwraca data-URI PRZETWORZONEJ miniatury (kwadrat/portret) z cache."""
     d = _covers_dir(cache_dir, mode)
     safe = _safe_key(key)
     for f in d.glob(safe + ".*"):
         try:
-            return _to_data_uri(f.read_bytes())
+            return _to_data_uri(make_display_thumb(f.read_bytes(), mode, fit))
         except Exception:
             return None
     return None
@@ -221,7 +265,8 @@ def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict,
     steam → PORTRET (grid 600x900 → kwadrat jako ostateczność)
     """
     mode = _mode(mode)
-    hit = cached_cover(cache_dir, key, mode)
+    fit = cfg.get("icon_fit_mode", "pad")
+    hit = cached_cover(cache_dir, key, mode, fit)
     if hit:
         return {"key": key, "found": True, "data_uri": hit, "cached": True}
 
@@ -260,10 +305,11 @@ def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict,
             continue
         try:
             out = _covers_dir(cache_dir, mode) / (_safe_key(key) + _ext(_mime(data)))
-            out.write_bytes(data)
+            out.write_bytes(data)     # zapisujemy SUROWY obraz (do re-bake przy zmianie fit)
         except Exception:
             pass
-        return {"key": key, "found": True, "data_uri": _to_data_uri(data),
+        return {"key": key, "found": True,
+                "data_uri": _to_data_uri(make_display_thumb(data, mode, fit)),
                 "cached": False}
 
     return {"key": key, "found": False, "data_uri": None, "cached": False}

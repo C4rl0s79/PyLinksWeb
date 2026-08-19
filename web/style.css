@@ -90,22 +90,17 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
   overflow:hidden; cursor:pointer; transition:border-color .12s, transform .06s;
 }
 .card:hover{border-color:var(--acc); transform:translateY(-2px)}
-/* ramka miniatury ZAWSZE kwadratowa (padding-hack — niezależny od aspect-ratio) */
+/* Miniatura jest UPIECZONA po stronie Pythona (kwadrat/portret), więc CSS
+   trywialny: obrazek w naturalnym rozmiarze definiuje kształt ramki. */
 .card .thumb{
-  position:relative; width:100%; aspect-ratio:1/1; background:var(--bg3);
+  position:relative; width:100%; background:var(--bg3);
   color:var(--fg2); overflow:hidden;
 }
-.card .thumb::before{content:"";display:block;padding-top:100%}   /* 1:1 (fallback dla ::before) */
-.card .thumb img,
-.card .thumb .ph{position:absolute; inset:0; width:100%; height:100%}
-.card .thumb img{display:block}
-.card .thumb .ph{display:flex;align-items:center;justify-content:center;font-size:34px}
-/* tryb dopasowania (tylko tryb ikon, kwadrat): pad = całość, crop = wypełnij */
-.grid.fit-pad  .card .thumb img{object-fit:contain}
-.grid.fit-crop .card .thumb img{object-fit:cover}
-/* TRYB STEAM: karty portretowe (2:3), grafika wypełnia — nadpisuje powyższe */
-.grid.mode-steam .card .thumb::before{padding-top:150%}
-.grid.mode-steam .card .thumb img{object-fit:cover}
+.card .thumb img{display:block; width:100%; height:auto}
+.card .thumb .ph{
+  position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  font-size:34px;
+}
 .card .thumb.loading .ph{opacity:.5}
 .card .thumb .src{
   position:absolute;top:6px;left:6px;font-size:10px;font-weight:700;
