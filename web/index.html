@@ -4,15 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PyLinks</title>
-  <!-- cache-busting: WebView2 potrafi trzymać stary CSS mimo restartu -->
-  <script>
-    (function(){
-      var l = document.createElement('link');
-      l.rel = 'stylesheet';
-      l.href = 'style.css?v=' + Date.now();
-      document.head.appendChild(l);
-    })();
-  </script>
+  <!--PYLINKS_CSS--><!-- main.py wkleja tu <style> z web/style.css (inline = zero cache) -->
 </head>
 <body>
   <header class="topbar">
@@ -24,6 +16,9 @@
     </div>
     <div class="actions">
       <button class="btn" id="btnScan">🔍 Skanuj</button>
+      <label class="sizer" title="Rozmiar miniatur">▦
+        <input type="range" id="cardSize" min="96" max="288" step="8" value="160">
+      </label>
       <button class="btn ghost" id="btnMode" title="Tryb grafiki: Ikony (kwadrat, skróty .lnk) / Steam (portret do biblioteki Steam)">🖼 Tryb: Ikony</button>
       <button class="btn ghost" id="btnFit" title="Dopasowanie ikony (kwadrat): całość vs wypełnij">⬚ Dopasowanie</button>
       <button class="btn ghost" id="btnPing" title="Test mostu Python↔JS">⚡ Test mostu</button>
@@ -99,12 +94,6 @@
     </div>
   </div>
 
-  <script>
-    (function(){
-      var s = document.createElement('script');
-      s.src = 'app.js?v=' + Date.now();
-      document.body.appendChild(s);
-    })();
-  </script>
+  <!--PYLINKS_JS--><!-- main.py wkleja tu <script> z web/app.js (inline = zero cache) -->
 </body>
 </html>

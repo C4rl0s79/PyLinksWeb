@@ -83,7 +83,16 @@ class Api:
             },
             "config_exists": CONFIG_PATH.exists(),
             "rom_enabled": bool(cfg.get("rom_support", {}).get("enabled", False)),
+            "thumb_size": int(cfg.get("thumb_size", 160) or 160),
         }
+
+    def set_thumb_size(self, px) -> dict:
+        try:
+            px = max(96, min(320, int(px)))
+        except Exception:
+            px = 160
+        self._save_config_value("thumb_size", px)
+        return {"ok": True, "thumb_size": px}
 
     def get_theme(self) -> dict:
         return dict(C)

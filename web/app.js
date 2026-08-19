@@ -12,6 +12,10 @@ let LOAD_TOK = 0;       // token anulowania leniwego ładowania okładek
 let FIT      = "pad";   // tryb dopasowania ikony (kwadrat): "pad" | "crop"
 let MODE     = "icon";  // tryb grafiki: "icon" (kwadrat) | "steam" (portret)
 
+function applyCardSize(px){
+  document.documentElement.style.setProperty("--card-size", px + "px");
+}
+
 function applyFit(){
   // klasa siatki niesie i tryb grafiki, i dopasowanie (istotne tylko dla ikon)
   el("grid").className = "grid mode-" + MODE + " fit-" + FIT;
@@ -49,6 +53,8 @@ async function init(){
     setBridge(true, "OK");
     try{ FIT = await api("get_fit_mode"); }catch(_){}
     applyFit();
+    const sz = info.thumb_size || 160;
+    el("cardSize").value = sz; applyCardSize(sz);
     await loadPlatforms();
   }catch(e){
     setBridge(false, "błąd: " + e.message);
@@ -128,29 +134,8 @@ function renderPC(){
   if (!games.length){ grid.innerHTML = `<div class="welcome muted">Brak gier.</div>`; return; }
   grid.innerHTML = "";
   for (const g of games) grid.appendChild(card(g.name, g.source, g.source, g));
-  squareThumbs();      // wymuś kwadrat/portret w JS (niezależnie od CSS engine)
-  loadCovers(games);   // leniwe doczytanie okładek
+  loadCovers(games);   // leniwe doczytanie okładek (miniatury upieczone na kwadrat/portret w PIL)
 }
-
-// Gwarantowany kształt ramki miniatury w JS — aspect-ratio/::before bywają
-// ignorowane w niektórych wersjach WebView2. Ikony: kwadrat. Steam: portret 2:3.
-function squareThumbs(){
-  requestAnimationFrame(() => {
-    const ratio = (MODE === "steam") ? 1.5 : 1.0;
-    const thumbs = document.querySelectorAll("#grid .card .thumb");
-    let first = "";
-    thumbs.forEach((t, i) => {
-      const w = t.offsetWidth;
-      if (w){ t.style.height = Math.round(w * ratio) + "px";
-              if (i === 0) first = `${w}×${Math.round(w*ratio)}`; }
-    });
-    if (first){ const s = el("statBridge"); if (s) s.title = "thumb " + first; }
-  });
-}
-let _rsz;
-window.addEventListener("resize", () => {
-  clearTimeout(_rsz); _rsz = setTimeout(squareThumbs, 120);
-});
 
 function card(name, sub, src, game){
   const c = document.createElement("div");
@@ -172,8 +157,9 @@ function setCover(key, dataUri){
   if (!c) return;
   c.classList.remove("loading");
   if (!dataUri) return;
+  const old = c.querySelector("img"); if (old) old.remove();
   const img = document.createElement("img");
-  img.src = dataUri; img.alt = "";
+  img.alt = ""; img.src = dataUri;
   c.insertBefore(img, c.querySelector(".ph"));
 }
 const cssEsc = (s) => (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/"/g,'\\"');
@@ -514,6 +500,8 @@ el("btnFit").onclick = async () => {
   try{ await api("set_fit_mode", FIT); }catch(_){}
   if (PC_GAMES.length) renderPC();   // przepiecz miniatury (pad/crop robione w PIL)
 };
+el("cardSize").oninput = (e) => applyCardSize(+e.target.value);
+el("cardSize").onchange = (e) => { try{ api("set_thumb_size", +e.target.value); }catch(_){} };
 el("btnMode").onclick = () => {
   MODE = (MODE === "steam") ? "icon" : "steam";
   applyFit();

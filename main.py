@@ -27,7 +27,22 @@ import webview
 from pylinks.api import Api
 from pylinks import __version__
 
-_WEB = Path(__file__).resolve().parent / "web" / "index.html"
+_WEB_DIR = Path(__file__).resolve().parent / "web"
+_WEB = _WEB_DIR / "index.html"
+
+
+def _build_html() -> str:
+    """Wczytuje index.html i WKLEJA inline style.css + app.js.
+
+    Dzięki temu nie ma żadnych podzasobów (css/js) do zcache'owania przez
+    WebView2 — każdy start ładuje świeży kod prosto z plików na dysku.
+    """
+    html = _WEB.read_text(encoding="utf-8")
+    css = (_WEB_DIR / "style.css").read_text(encoding="utf-8")
+    js = (_WEB_DIR / "app.js").read_text(encoding="utf-8")
+    html = html.replace("<!--PYLINKS_CSS-->", f"<style>\n{css}\n</style>")
+    html = html.replace("<!--PYLINKS_JS-->", f"<script>\n{js}\n</script>")
+    return html
 
 
 def _single_instance_guard() -> "object | None":
@@ -51,7 +66,7 @@ def main() -> int:
     api = Api()
     window = webview.create_window(
         title=f"PyLinks {__version__}",
-        url=str(_WEB),
+        html=_build_html(),          # inline (css+js wklejone) = zero cache podzasobów
         js_api=api,
         width=1280, height=800,
         min_size=(900, 560),
