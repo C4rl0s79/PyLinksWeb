@@ -195,10 +195,12 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 }
 .pk-item{
   cursor:pointer; border:2px solid transparent; border-radius:10px; overflow:hidden;
-  background:var(--bg3); transition:border-color .1s, transform .06s;
+  background:var(--bg2); transition:border-color .1s, transform .06s;
+  display:flex; flex-direction:column;
 }
 .pk-item:hover{border-color:var(--acc); transform:translateY(-2px)}
-.pk-item img{width:100%; aspect-ratio:1/1; object-fit:contain; background:var(--bg2); display:block}
+/* CAŁA grafika widoczna: stała wysokość kafelka + contain (nigdy nie przycinamy) */
+.pk-item img{width:100%; height:150px; object-fit:contain; background:var(--bg3); display:block}
 .pk-item .meta{font-size:10px;color:var(--fg2);padding:4px 6px;text-align:center}
 .pk-item.sq{border-color:rgba(166,227,161,.35)}
 .pk-item .kind{font-weight:700;text-transform:uppercase;letter-spacing:.3px}
@@ -216,12 +218,11 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 .pk-sec{margin-bottom:18px}
 .pk-sec-h{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
   color:var(--fg2);margin:0 2px 8px}
-.pk-row{display:flex;gap:10px;overflow-x:auto;padding-bottom:6px}
-.pk-row .pk-item{flex:0 0 auto}
-.pk-row.pk-grid-row .pk-item img,
-.pk-row.pk-grid .pk-item img{width:120px;aspect-ratio:2/3;object-fit:cover}
-.pk-row.pk-hero .pk-item img{height:110px;width:auto;aspect-ratio:auto;object-fit:cover}
-.pk-row.pk-logo .pk-item img{height:90px;width:auto;aspect-ratio:auto;object-fit:contain;
+.pk-row{display:flex;gap:10px;overflow-x:auto;padding-bottom:8px}
+.pk-row .pk-item{flex:0 0 auto; width:auto}
+/* poziome paski: pełny obraz w naturalnych proporcjach (contain), stała wysokość */
+.pk-row .pk-item img{height:180px; width:auto; max-width:360px; object-fit:contain; background:var(--bg3)}
+.pk-row-logo .pk-item img{
   background:repeating-conic-gradient(var(--bg3) 0% 25%,var(--bg2) 0% 50%) 50%/16px 16px}
 
 /* płynny, natywny scroll — koniec z bólem tkintera */

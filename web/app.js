@@ -299,7 +299,7 @@ function renderSteamOptions(opt){
     sec.className = "pk-sec";
     sec.innerHTML = `<div class="pk-sec-h">${label} <span class="muted">${list.length}</span></div>`;
     const row = document.createElement("div");
-    row.className = "pk-row pk-" + asset;
+    row.className = "pk-row pk-row-" + asset;
     if (!list.length){
       row.innerHTML = `<div class="pk-empty" style="justify-content:flex-start">— brak —</div>`;
     }else{
