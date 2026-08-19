@@ -42,11 +42,19 @@ def bake_ico(cache_dir: Path, key: str, fit: str, offset: float,
     raw = _raw_bytes(cache_dir, key, "icon")
     if not raw:
         return None
-    img = _art.display_thumb_img(raw, "icon", fit, offset, size=256)
+    if spine_system:
+        # grzbiet: surowa grafika (plakat) → cover-fill obok grzbietu (jak podgląd)
+        from io import BytesIO
+        try:
+            from PIL import Image
+            base = Image.open(BytesIO(raw)).convert("RGBA")
+        except Exception:
+            return None
+        img = _spine.add_platform_spine(base, spine_system, spine_side, logo_dir=logo_dir)
+    else:
+        img = _art.display_thumb_img(raw, "icon", fit, offset, size=256)
     if img is None:
         return None
-    if spine_system:
-        img = _spine.add_platform_spine(img, spine_system, spine_side, logo_dir=logo_dir)
     try:
         return _art.make_ico_bytes(img)
     except Exception:

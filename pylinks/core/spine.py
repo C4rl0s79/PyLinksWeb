@@ -109,10 +109,19 @@ def _ensure_logo_contrast(logo):
         return logo
 
 
+def _cover(im, tw, th):
+    """Skaluje, by wypełnić (tw,th), i przycina do środka (jak object-fit:cover)."""
+    scale = max(tw / im.width, th / im.height)
+    nw, nh = max(1, round(im.width * scale)), max(1, round(im.height * scale))
+    src = im.resize((nw, nh), Image.LANCZOS)
+    left, top = (nw - tw) // 2, (nh - th) // 2
+    return src.crop((left, top, left + tw, top + th))
+
+
 def add_platform_spine(img, system: str, side: str = "left",
                        frac: float = 0.22, logo_dir: str = ""):
-    """Nakłada pionowy grzbiet z logo platformy na kwadratową ikonę (PIL RGBA).
-    Bez logo albo bez PIL — zwraca obraz bez zmian."""
+    """Kwadratowa ikona = grzbiet (frac szerokości) + grafika WYPEŁNIAJĄCA resztę
+    (cover). DOKŁADNIE jak podgląd CSS w GUI. Bez logo/PIL — zwraca bez zmian."""
     if not _PIL or not system:
         return img
     logo = _platform_logo_pil(logo_dir, system)
@@ -120,22 +129,13 @@ def add_platform_spine(img, system: str, side: str = "left",
         return img
     try:
         base = img.convert("RGBA")
-        W0, H0 = base.size
-        if min(W0, H0) < 24:
+        if min(base.size) < 24:
             return base
-        _LONG = 512
-        if max(W0, H0) != _LONG:
-            r = _LONG / max(W0, H0)
-            base = base.resize((max(1, round(W0 * r)), max(1, round(H0 * r))), Image.LANCZOS)
-        W, H = base.size
-        S = max(W, H)
+        S = 512                                   # bok kwadratu (jakość; .ico zejdzie do 256)
+        sw = max(14, int(round(S * frac)))        # szerokość grzbietu (22%)
+        aw = S - sw                               # obszar grafiki
+        artimg = _cover(base, aw, S)              # grafika WYPEŁNIA (cover)
         logo = _ensure_logo_contrast(logo)
-        target_sw = max(14, int(round(S * frac)))
-        pad = S - W
-        if int(S * 0.15) <= pad <= int(S * 0.42):
-            sw, shrink = pad, False
-        else:
-            sw, shrink = target_sw, True
 
         from PIL import ImageDraw
         spine = Image.new("RGBA", (sw, S), _hex_rgba("#141414"))
@@ -156,18 +156,10 @@ def add_platform_spine(img, system: str, side: str = "left",
         spine.alpha_composite(lg, ((sw - lg.width) // 2, (S - lg.height) // 2))
 
         out = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-        if shrink:
-            artimg = base.resize((max(1, S - sw), S), Image.LANCZOS)
-            if side == "left":
-                out.alpha_composite(artimg, (sw, 0)); out.alpha_composite(spine, (0, 0))
-            else:
-                out.alpha_composite(artimg, (0, 0)); out.alpha_composite(spine, (S - sw, 0))
+        if side == "left":
+            out.alpha_composite(artimg, (sw, 0)); out.alpha_composite(spine, (0, 0))
         else:
-            ay = (S - H) // 2
-            if side == "left":
-                out.alpha_composite(base, (sw, ay)); out.alpha_composite(spine, (0, 0))
-            else:
-                out.alpha_composite(base, (0, ay)); out.alpha_composite(spine, (S - sw, 0))
+            out.alpha_composite(artimg, (0, 0)); out.alpha_composite(spine, (S - sw, 0))
         return out
     except Exception:
         return img
