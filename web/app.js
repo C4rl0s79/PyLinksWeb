@@ -117,17 +117,20 @@ async function runScan(){
 
 // ── ROM-y ────────────────────────────────────────────────────────────────
 let ROM_GAMES = [];
+let SPINE = {enabled:false, side:"left"};
+let SYS_LOGO = {};      // system → logo (data-URI)
 async function scanRomsUI(){
   const box = el("romSystems");
   try{
     const r = await api("scan_roms");
     if (!r.enabled){ box.innerHTML = `<div class="muted pad">wyłączone w configu</div>`; return; }
-    ROM_GAMES = [];
+    ROM_GAMES = []; SYS_LOGO = {}; SPINE = r.spine || SPINE;
     el("romTotal").textContent = r.total ? `(${r.total})` : "";
     box.innerHTML = "";
     for (const s of r.systems){
       if (!s.count) continue;
       ROM_GAMES.push(...s.games);
+      if (s.logo) SYS_LOGO[s.name] = s.logo;
       const b = document.createElement("button");
       b.className = "plat-item";
       b.innerHTML = `<span>${s.name}</span><span class="count">${s.count}</span>`;
@@ -145,8 +148,23 @@ function showRoms(system, node){
   const games = ROM_GAMES.filter(g => g.system === system);
   el("gridSub").textContent = `${games.length} gier`;
   const grid = el("grid"); grid.innerHTML = "";
-  for (const g of games) grid.appendChild(card(g.name, g.system, "rom", g));
+  for (const g of games){
+    const c = card(g.name, g.system, "rom", g);
+    if (SPINE.enabled && SYS_LOGO[g.system]) addSpine(c, SYS_LOGO[g.system], SPINE.side);
+    grid.appendChild(c);
+  }
   loadCovers(games);
+}
+
+function addSpine(cardEl, logoUri, side){
+  const thumb = cardEl.querySelector(".thumb");
+  if (!thumb) return;
+  thumb.classList.add(side === "right" ? "spine-right" : "spine-left");
+  const sp = document.createElement("div");
+  sp.className = "spine";
+  const img = document.createElement("img"); img.src = logoUri; img.alt = "";
+  sp.appendChild(img);
+  thumb.appendChild(sp);
 }
 
 function updateCounts(counts, total){
@@ -210,6 +228,7 @@ function setCover(key, dataUri, fit, offset){
   const old = c.querySelector("img"); if (old) old.remove();
   const ph = c.querySelector(".ph"); if (ph) ph.style.display = "none";  // schowaj 🎮 pod okładką
   const img = document.createElement("img");
+  img.className = "cover";
   img.alt = ""; styleCover(img, fit, offset); img.src = dataUri;
   c.insertBefore(img, ph);
 }

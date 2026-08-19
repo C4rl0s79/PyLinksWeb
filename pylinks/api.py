@@ -178,25 +178,38 @@ class Api:
 
     # --- skan ROM-ów (config.rom_support) ---
     def scan_roms(self) -> dict:
-        """Skanuje systemy ROM i zwraca {enabled, systems:[{name,count,games}], total}."""
+        """Skanuje systemy ROM i zwraca {enabled, systems:[...], total, spine}."""
         from pylinks.services import scan_roms as _sr
-        res = _sr.scan_roms(_load_config())
+        from pylinks.core import spine as _spine
+        cfg = _load_config()
+        res = _sr.scan_roms(cfg)
         self._rom_games = []
         for s in res.get("systems", []):
             for g in s.get("games", []):
                 g["source"] = "rom"
                 self._rom_games.append(g)
-        # odchudzone wpisy z kluczem dla frontendu
+        # grzbiety: globalny przełącznik + logo per system (data-URI)
+        spine_on = bool(cfg.get("icon_platform_spine", False))
+        spine_side = cfg.get("icon_spine_side", "left")
+        logo_dir = cfg.get("platform_logo_dir", "")
         out_sys = []
         for s in res.get("systems", []):
+            logo = _spine.platform_logo_uri(logo_dir, s["name"]) if spine_on else None
             out_sys.append({
-                "name": s["name"], "count": s["count"],
+                "name": s["name"], "count": s["count"], "logo": logo,
                 "games": [{"key": _game_key(dict(g, source="rom")),
                            "name": g["name"], "system": g.get("system", ""),
                            "path": g.get("path", "")} for g in s["games"]],
             })
         return {"enabled": res.get("enabled", False),
-                "total": res.get("total", 0), "systems": out_sys}
+                "total": res.get("total", 0), "systems": out_sys,
+                "spine": {"enabled": spine_on, "side": spine_side}}
+
+    def set_spine(self, enabled: bool, side: str = "left") -> dict:
+        self._save_config_value("icon_platform_spine", bool(enabled))
+        self._save_config_value("icon_spine_side", "right" if side == "right" else "left")
+        return {"ok": True, "enabled": bool(enabled),
+                "side": "right" if side == "right" else "left"}
 
     def get_rom_games(self, system: str = "") -> list:
         games = self._rom_games

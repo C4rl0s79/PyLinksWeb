@@ -111,6 +111,23 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
   font-size:34px;
 }
 .card .thumb.loading .ph{opacity:.5}
+/* ── grzbiet platformy (spine) ── */
+.card .thumb .spine{
+  position:absolute; top:0; bottom:0; width:22%; z-index:2;
+  background:#141414; display:flex; align-items:center; justify-content:center;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);
+}
+.card .thumb.spine-left  .spine{left:0; border-right:2px solid rgba(0,0,0,.5)}
+.card .thumb.spine-right .spine{right:0; border-left:2px solid rgba(0,0,0,.5)}
+/* logo: krótki bok = szerokość grzbietu (height), długi biegnie pionowo po obrocie */
+.card .thumb .spine img{
+  height:16%; width:auto; max-width:calc(var(--card-size,160px) * 0.94);
+  transform:rotate(-90deg);
+}
+.card .thumb.spine-right .spine img{transform:rotate(90deg)}
+/* grafika ustępuje miejsca grzbietowi */
+.card .thumb.spine-left  img.cover{position:absolute;top:0;height:100%;left:22%;width:78%}
+.card .thumb.spine-right img.cover{position:absolute;top:0;height:100%;left:0;width:78%}
 .card .thumb .src{
   position:absolute;top:6px;left:6px;font-size:10px;font-weight:700;
   padding:2px 7px;border-radius:999px;background:var(--bg2);color:var(--fg);
