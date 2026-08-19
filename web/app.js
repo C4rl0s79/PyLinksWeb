@@ -92,7 +92,6 @@ async function showLinks(name, node){
     el("gridSub").textContent = `${games.length} skrótów`;
     grid.innerHTML = games.length ? "" : `<div class="welcome muted">Brak skrótów.</div>`;
     for (const g of games) grid.appendChild(card(g.name, g.platform, "extra"));
-    squareThumbs();
   }catch(e){ grid.innerHTML = `<div class="welcome muted">Błąd: ${e.message}</div>`; }
 }
 
