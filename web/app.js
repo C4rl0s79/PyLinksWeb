@@ -135,6 +135,11 @@ function renderPC(){
   grid.innerHTML = "";
   for (const g of games) grid.appendChild(card(g.name, g.source, g.source, g));
   loadCovers(games);   // leniwe doczytanie okładek (miniatury upieczone na kwadrat/portret w PIL)
+  requestAnimationFrame(() => {
+    const t = document.querySelector("#grid .card .thumb");
+    if (t){ const r = t.getBoundingClientRect();
+      el("gridSub").textContent = `${games.length} gier • DBG ramka ${Math.round(r.width)}×${Math.round(r.height)}`; }
+  });
 }
 
 function card(name, sub, src, game){

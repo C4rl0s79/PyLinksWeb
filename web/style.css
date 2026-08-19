@@ -83,6 +83,10 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 .grid{
   flex:1 1 auto; min-height:0; overflow-y:auto;      /* min-height:0 = warunek scrolla we flex */
   display:grid; grid-template-columns:repeat(auto-fill, var(--card-size,160px));  /* rozmiar ze suwaka */
+  /* WYMUSZONA wysokość wierszy — bez tego grid ściska wiersze, by zmieścić
+     wszystkie karty w kontenerze (zamiast przewijać). max-content = wiersz
+     dokładnie tak wysoki jak zawartość, nadmiar → scroll. */
+  grid-auto-rows:max-content;
   gap:14px; align-content:start; justify-content:start; padding-right:6px;
 }
 .welcome{grid-column:1/-1;max-width:640px}
