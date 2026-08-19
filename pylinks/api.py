@@ -185,11 +185,24 @@ class Api:
         return art.fetch_cover(_load_config(), CACHE_DIR, key, g, mode)
 
     def cover_candidates(self, key: str, query: str = "", mode: str = "icon") -> dict:
-        """Lista kandydatów do okna wyboru (miniatury jako data-URI) dla trybu."""
+        """Lista kandydatów do okna wyboru (miniatury jako data-URI) dla trybu.
+
+        Poza SteamGridDB dołącza dodatkowe źródła (IGDB / TheGamesDB / Steam CDN),
+        gdy skonfigurowane — jak w oryginale. Tylko tryb ikon (Steam ma multi-asset)."""
         g = self._find_game(key)
         if not g:
             return {"key": key, "candidates": [], "reason": "nieznana gra"}
-        cands = art.candidates_for_game(_load_config(), g, query=query, mode=mode)
+        cfg = _load_config()
+        cands = art.candidates_for_game(cfg, g, query=query, mode=mode)
+        if mode != "steam" and not query:
+            try:
+                from pylinks.services.extra_art import ExtraArtSources
+                extra = ExtraArtSources(cfg).candidates(
+                    g.get("name", ""), str(g.get("appid") or ""), "PC")
+                seen = {c["id"] for c in cands}
+                cands += [c for c in extra if c.get("id") not in seen]
+            except Exception:
+                pass
         return {"key": key, "candidates": cands,
                 "reason": "" if cands else "brak wyników / brak klucza SGDB"}
 

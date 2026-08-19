@@ -387,11 +387,13 @@ def candidates_for_game(cfg: dict, game: dict, query: str = "",
         return (client.icons_for_appid(val) if kind_id == "appid"
                 else client.icons_for_id(val))
 
-    groups = [("ikona", _icons()), ("kwadrat", _grids(_SQUARE_DIMS))]
-    if not any(items for _, items in groups):     # ostateczność: brak kwadratów
-        groups.append(("plakat", _grids(_STEAM_DIMS)))
+    # ikony + kwadraty + POSTERY (postery to opcja, ale po kwadratach)
+    kind_prio = {"ikona": 0, "kwadrat": 1, "plakat": 2}
+    groups = [("ikona", _icons()),
+              ("kwadrat", _grids(_SQUARE_DIMS)),
+              ("plakat", _grids(_STEAM_DIMS))]
 
-    # zbierz unikaty, pobierz miniatury, ZMIERZ realny rozmiar (PIL) → sort desc
+    # zbierz unikaty, pobierz miniatury, ZMIERZ realny rozmiar (PIL)
     seen: set[str] = set()
     out: list[dict] = []
     for kind, items in groups:
@@ -419,9 +421,9 @@ def candidates_for_game(cfg: dict, game: dict, query: str = "",
                 "square": (kind in ("ikona", "kwadrat")) or bool(
                     w and h and abs(int(w) - int(h)) <= 2),
             })
-    # duże pierwsze (min(w,h) malejąco); ikony bez wymiarów lądują wg kolejności API
-    out.sort(key=lambda c: min(c["w"], c["h"]) if (c["w"] and c["h"]) else 0,
-             reverse=True)
+    # sort: najpierw rodzaj (ikona→kwadrat→plakat), w obrębie rodzaju duże pierwsze
+    out.sort(key=lambda c: (kind_prio.get(c["kind"], 9),
+                            -(min(c["w"], c["h"]) if (c["w"] and c["h"]) else 0)))
     return out[:limit]
 
 

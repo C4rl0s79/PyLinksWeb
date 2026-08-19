@@ -158,9 +158,10 @@ function setCover(key, dataUri){
   c.classList.remove("loading");
   if (!dataUri) return;
   const old = c.querySelector("img"); if (old) old.remove();
+  const ph = c.querySelector(".ph"); if (ph) ph.style.display = "none";  // schowaj 🎮 pod okładką
   const img = document.createElement("img");
   img.alt = ""; img.src = dataUri;
-  c.insertBefore(img, c.querySelector(".ph"));
+  c.insertBefore(img, ph);
 }
 const cssEsc = (s) => (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/"/g,'\\"');
 
