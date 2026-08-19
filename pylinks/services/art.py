@@ -145,6 +145,19 @@ class SgdbClient:
     def icons_for_appid(self, appid) -> list[dict]:
         return self._icons(f"icons/steam/{appid}")
 
+    # heroes (tło/banner) i logos (przezroczyste logo) — do trybu Steam
+    def heroes_for_id(self, sgdb_id) -> list[dict]:
+        return self._icons(f"heroes/game/{sgdb_id}?types=static,animated")
+
+    def heroes_for_appid(self, appid) -> list[dict]:
+        return self._icons(f"heroes/steam/{appid}?types=static,animated")
+
+    def logos_for_id(self, sgdb_id) -> list[dict]:
+        return self._icons(f"logos/game/{sgdb_id}")
+
+    def logos_for_appid(self, appid) -> list[dict]:
+        return self._icons(f"logos/steam/{appid}")
+
 
 # ── data-URI helpers ───────────────────────────────────────────────────────
 def _mime(data: bytes) -> str:
@@ -364,6 +377,106 @@ def candidates_for_game(cfg: dict, game: dict, query: str = "",
             "square": is_sq,
         })
     return out
+
+
+# ── tryb Steam: kilka typów grafik (grid + hero/tło + logo) ────────────────
+_STEAM_ASSETS = ("grid", "hero", "logo")
+
+
+def _dl_variants(items: list[dict], limit: int) -> list[dict]:
+    """Pobiera miniatury wariantów jako data-URI (z URL-em pełnym do wyboru)."""
+    out: list[dict] = []
+    for a in items[:limit]:
+        turl = a.get("thumb") or a.get("url")
+        if not turl:
+            continue
+        data = fetch(turl)
+        if not data:
+            continue
+        out.append({
+            "url": a.get("url", ""), "thumb": _to_data_uri(data),
+            "w": a.get("width", 0) or 0, "h": a.get("height", 0) or 0,
+            "style": (a.get("style") or ""),
+        })
+    return out
+
+
+def _steam_asset_name(key: str, asset: str) -> str:
+    safe = _safe_key(key)
+    return safe if asset == "grid" else f"{safe}__{asset}"
+
+
+def cached_steam_asset(cache_dir: Path, key: str, asset: str) -> str | None:
+    d = _covers_dir(cache_dir, "steam")
+    for f in d.glob(_steam_asset_name(key, asset) + ".*"):
+        try:
+            return _to_data_uri(f.read_bytes())
+        except Exception:
+            return None
+    return None
+
+
+def steam_art_options(cfg: dict, game: dict, query: str = "",
+                      limit: int = 12) -> dict:
+    """Wszystkie warianty grafik Steam naraz: grid (okładka), hero (tło), logo.
+
+    Zwraca {"ok", "sgdb_id", "grid":[...], "hero":[...], "logo":[...]}.
+    Każdy wariant: {url, thumb (data-URI), w, h, style}.
+    """
+    client = SgdbClient((cfg.get("api_keys", {}) or {}).get("sgdb_key", ""))
+    if not client.ok:
+        return {"ok": False, "reason": "brak klucza SGDB",
+                "grid": [], "hero": [], "logo": []}
+    ref = _resolve_ref(client, game, query)
+    if not ref:
+        return {"ok": False, "reason": "brak dopasowania w SGDB",
+                "grid": [], "hero": [], "logo": []}
+    kind_id, val = ref
+    if kind_id == "appid":
+        grids = client.grids_for_appid(val, per_page=limit, dims=_STEAM_DIMS)
+        heroes = client.heroes_for_appid(val)
+        logos = client.logos_for_appid(val)
+    else:
+        grids = client.grids_for_id(val, per_page=limit, dims=_STEAM_DIMS)
+        heroes = client.heroes_for_id(val)
+        logos = client.logos_for_id(val)
+    return {
+        "ok": True,
+        "sgdb_id": val if kind_id == "game" else None,
+        "grid": _dl_variants(grids, limit),
+        "hero": _dl_variants(heroes, limit),
+        "logo": _dl_variants(logos, limit),
+    }
+
+
+def save_steam_asset(cache_dir: Path, key: str, asset: str, url: str) -> dict:
+    """Zapisuje wybrany wariant danego typu (grid/hero/logo) do cache Steam."""
+    if asset not in _STEAM_ASSETS or not url:
+        return {"found": False, "data_uri": None}
+    data = fetch(url)
+    if not data:
+        return {"found": False, "data_uri": None}
+    d = _covers_dir(cache_dir, "steam")
+    name = _steam_asset_name(key, asset)
+    for f in d.glob(name + ".*"):
+        try:
+            f.unlink()
+        except Exception:
+            pass
+    try:
+        (d / (name + _ext(_mime(data)))).write_bytes(data)
+    except Exception:
+        pass
+    return {"found": True, "data_uri": _to_data_uri(data)}
+
+
+def clear_steam_asset(cache_dir: Path, key: str, asset: str) -> None:
+    d = _covers_dir(cache_dir, "steam")
+    for f in d.glob(_steam_asset_name(key, asset) + ".*"):
+        try:
+            f.unlink()
+        except Exception:
+            pass
 
 
 def suggest_games(cfg: dict, query: str, limit: int = 25) -> list[dict]:

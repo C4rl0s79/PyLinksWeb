@@ -207,6 +207,62 @@ class Api:
             return {"key": key, "found": False, "data_uri": None}
         return art.fetch_cover(_load_config(), CACHE_DIR, key, g, mode)
 
+    # --- tryb Steam: kilka typów grafik (grid + hero/tło + logo) ---
+    def steam_art_options(self, key: str, query: str = "") -> dict:
+        """Wszystkie warianty grafik Steam naraz (grid/hero/logo) do okna wyboru."""
+        g = self._find_game(key)
+        if not g:
+            return {"ok": False, "reason": "nieznana gra",
+                    "grid": [], "hero": [], "logo": []}
+        cfg = _load_config()
+        res = art.steam_art_options(cfg, g, query=query)
+        # bieżące wybory jako URL-e (do podświetlenia wariantu w UI)
+        store = cfg.get("steam_art_by_key", {}) or {}
+        entry = store.get(key, {}) if isinstance(store, dict) else {}
+        res["current"] = {a: (entry.get(a) if isinstance(entry, dict) else None)
+                          for a in ("grid", "hero", "logo")}
+        res["key"] = key
+        return res
+
+    def choose_steam_asset(self, key: str, asset: str, url: str) -> dict:
+        """Przypina wariant danego typu (grid/hero/logo) i zapisuje w config."""
+        res = art.save_steam_asset(CACHE_DIR, key, asset, url)
+        if res.get("found"):
+            self._save_steam_asset_sel(key, asset, url)
+        return {"key": key, "asset": asset, "found": res.get("found", False),
+                "data_uri": res.get("data_uri")}
+
+    def reset_steam_asset(self, key: str, asset: str) -> dict:
+        """Usuwa wybrany wariant danego typu (reset)."""
+        art.clear_steam_asset(CACHE_DIR, key, asset)
+        self._save_steam_asset_sel(key, asset, None)
+        return {"key": key, "asset": asset, "ok": True}
+
+    def _save_steam_asset_sel(self, key: str, asset: str, url) -> None:
+        """Zapis wyboru typu Steam w config.steam_art_by_key[key][asset]."""
+        try:
+            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) \
+                if CONFIG_PATH.exists() else _default_config()
+            store = raw.get("steam_art_by_key")
+            if not isinstance(store, dict):
+                store = {}
+            entry = store.get(key)
+            if not isinstance(entry, dict):
+                entry = {}
+            if url is None:
+                entry.pop(asset, None)
+            else:
+                entry[asset] = url
+            if entry:
+                store[key] = entry
+            else:
+                store.pop(key, None)
+            raw["steam_art_by_key"] = store
+            CONFIG_PATH.write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
     # --- trwały zapis wyboru (icon→selected_icon_keys, steam→steam_art_by_key) ---
     def _save_selection(self, key: str, url, mode: str = "icon") -> None:
         cfg_key = "steam_art_by_key" if str(mode).lower() == "steam" else "selected_icon_keys"

@@ -203,6 +203,21 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
   grid-column:1/-1; display:flex; align-items:center; gap:12px;
   color:var(--fg2); padding:20px 0; justify-content:center;
 }
+.pk-item.chosen{border-color:var(--grn)}
+.pk-item.busy{opacity:.5}
+
+/* ── tryb Steam: sekcje typów (grid / hero / logo) ── */
+.pk-grid.steam{display:block}
+.pk-sec{margin-bottom:18px}
+.pk-sec-h{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+  color:var(--fg2);margin:0 2px 8px}
+.pk-row{display:flex;gap:10px;overflow-x:auto;padding-bottom:6px}
+.pk-row .pk-item{flex:0 0 auto}
+.pk-row.pk-grid-row .pk-item img,
+.pk-row.pk-grid .pk-item img{width:120px;aspect-ratio:2/3;object-fit:cover}
+.pk-row.pk-hero .pk-item img{height:110px;width:auto;aspect-ratio:auto;object-fit:cover}
+.pk-row.pk-logo .pk-item img{height:90px;width:auto;aspect-ratio:auto;object-fit:contain;
+  background:repeating-conic-gradient(var(--bg3) 0% 25%,var(--bg2) 0% 50%) 50%/16px 16px}
 
 /* płynny, natywny scroll — koniec z bólem tkintera */
 ::-webkit-scrollbar{width:10px;height:10px}

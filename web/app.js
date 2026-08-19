@@ -226,8 +226,10 @@ let PK_TOK  = 0;        // token anulowania ładowania kandydatów
 
 function openPicker(game){
   PK_GAME = game;
-  el("pkTitle").textContent = "Okładka: " + game.name;
-  el("pkSub").textContent = game.source ? game.source.toUpperCase() : "";
+  el("pkTitle").textContent = (MODE === "steam" ? "Grafiki Steam: " : "Ikona: ") + game.name;
+  el("pkSub").textContent = (MODE === "steam"
+    ? "wybierz grid / tło / logo"
+    : (game.source ? game.source.toUpperCase() : ""));
   el("pkQuery").value = "";
   hideSuggest();
   el("picker").hidden = false;
@@ -240,18 +242,89 @@ async function pkLoad(query){
   if (!PK_GAME) return;
   const tok = ++PK_TOK;
   const box = el("pkGrid");
-  box.innerHTML = `<div class="pk-loading"><div class="spin"></div>Szukam okładek…</div>`;
+  box.innerHTML = `<div class="pk-loading"><div class="spin"></div>Szukam grafik…</div>`;
   try{
-    const r = await api("cover_candidates", PK_GAME.key, query || "", MODE);
-    if (tok !== PK_TOK) return;
-    renderCandidates(r);
+    if (MODE === "steam"){
+      const opt = await api("steam_art_options", PK_GAME.key, query || "");
+      if (tok !== PK_TOK) return;
+      renderSteamOptions(opt);
+    }else{
+      const r = await api("cover_candidates", PK_GAME.key, query || "", MODE);
+      if (tok !== PK_TOK) return;
+      renderCandidates(r);
+    }
   }catch(e){
     if (tok === PK_TOK) box.innerHTML = `<div class="pk-empty">Błąd: ${e.message}</div>`;
   }
 }
 
+// Steam: trzy sekcje typów grafik (grid / hero-tło / logo), po jednym wyborze.
+const STEAM_SECTIONS = [
+  ["grid", "Okładka (grid)"],
+  ["hero", "Tło (hero)"],
+  ["logo", "Logo"],
+];
+function renderSteamOptions(opt){
+  const box = el("pkGrid");
+  box.classList.add("steam");
+  if (!opt || opt.ok === false){
+    box.innerHTML = `<div class="pk-empty">${(opt && opt.reason) || "Brak wyników."}</div>`;
+    return;
+  }
+  box.innerHTML = "";
+  const cur = opt.current || {};
+  for (const [asset, label] of STEAM_SECTIONS){
+    const list = opt[asset] || [];
+    const sec = document.createElement("div");
+    sec.className = "pk-sec";
+    sec.innerHTML = `<div class="pk-sec-h">${label} <span class="muted">${list.length}</span></div>`;
+    const row = document.createElement("div");
+    row.className = "pk-row pk-" + asset;
+    if (!list.length){
+      row.innerHTML = `<div class="pk-empty" style="justify-content:flex-start">— brak —</div>`;
+    }else{
+      for (const v of list){
+        const it = document.createElement("div");
+        it.className = "pk-item";
+        const dims = (v.w && v.h) ? `${v.w}×${v.h}` : "";
+        it.title = `${dims} ${v.style||""}`.trim();
+        if (cur[asset] && cur[asset] === v.url) it.classList.add("chosen");
+        it.innerHTML = `<img src="${v.thumb}" alt="">${dims?`<div class="meta">${dims}</div>`:""}`;
+        it.onclick = () => chooseSteamAsset(asset, v.url, it);
+        row.appendChild(it);
+      }
+    }
+    sec.appendChild(row);
+    box.appendChild(sec);
+  }
+}
+
+async function chooseSteamAsset(asset, url, itEl){
+  if (!PK_GAME) return;
+  const row = itEl.parentElement;
+  row.querySelectorAll(".pk-item").forEach(n => n.classList.remove("chosen"));
+  itEl.classList.add("busy");
+  try{
+    const r = await api("choose_steam_asset", PK_GAME.key, asset, url);
+    itEl.classList.remove("busy");
+    if (r.found){
+      itEl.classList.add("chosen");
+      // okładka (grid) jest tym, co widać w karcie — podmień
+      if (asset === "grid"){
+        const thumb = document.querySelector(`.card[data-key="${cssEsc(PK_GAME.key)}"] .thumb`);
+        if (thumb){
+          const old = thumb.querySelector("img"); if (old) old.remove();
+          const img = document.createElement("img"); img.src = r.data_uri;
+          thumb.insertBefore(img, thumb.querySelector(".ph"));
+        }
+      }
+    }
+  }catch(e){ itEl.classList.remove("busy"); }
+}
+
 function renderCandidates(r){
   const box = el("pkGrid");
+  box.classList.remove("steam");
   const cs = (r && r.candidates) || [];
   if (!cs.length){
     box.innerHTML = `<div class="pk-empty">${(r && r.reason) || "Brak wyników."}</div>`;
@@ -338,11 +411,17 @@ async function pkLoadById(id){
   if (!PK_GAME) return;
   const tok = ++PK_TOK;
   const box = el("pkGrid");
-  box.innerHTML = `<div class="pk-loading"><div class="spin"></div>Szukam okładek…</div>`;
+  box.innerHTML = `<div class="pk-loading"><div class="spin"></div>Szukam grafik…</div>`;
   try{
-    const r = await api("cover_candidates_by_id", PK_GAME.key, id, MODE);
-    if (tok !== PK_TOK) return;
-    renderCandidates(r);
+    if (MODE === "steam"){
+      const opt = await api("steam_art_options", PK_GAME.key, String(id));
+      if (tok !== PK_TOK) return;
+      renderSteamOptions(opt);
+    }else{
+      const r = await api("cover_candidates_by_id", PK_GAME.key, id, MODE);
+      if (tok !== PK_TOK) return;
+      renderCandidates(r);
+    }
   }catch(e){ if (tok===PK_TOK) box.innerHTML = `<div class="pk-empty">Błąd: ${e.message}</div>`; }
 }
 
