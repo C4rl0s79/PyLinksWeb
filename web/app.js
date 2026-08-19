@@ -132,6 +132,7 @@ function card(name, sub, src, game){
   if (game && game.key){
     c.dataset.key = game.key;
     c.onclick = () => openPicker(game);
+    c.oncontextmenu = (e) => { e.preventDefault(); showCtx(e.clientX, e.clientY, game); };
   }
   c.title = (game && game.game_dir) ? game.game_dir : name;
   c.innerHTML =
@@ -181,6 +182,40 @@ function clearActive(){
   document.querySelectorAll(".side-item,.plat-item").forEach(n => n.classList.remove("active"));
 }
 
+// ── menu kontekstowe (prawy klik) ────────────────────────────────────────────
+let CTX_GAME = null;
+function showCtx(x, y, game){
+  CTX_GAME = game;
+  const m = el("ctxMenu");
+  m.hidden = false;
+  // trzymaj w oknie
+  const w = m.offsetWidth || 200, h = m.offsetHeight || 80;
+  m.style.left = Math.min(x, innerWidth - w - 8) + "px";
+  m.style.top  = Math.min(y, innerHeight - h - 8) + "px";
+}
+function hideCtx(){ el("ctxMenu").hidden = true; CTX_GAME = null; }
+
+async function resetCover(game){
+  const key = game.key;
+  const thumb = document.querySelector(`.card[data-key="${cssEsc(key)}"] .thumb`);
+  if (thumb){ thumb.classList.add("loading"); const im=thumb.querySelector("img"); if(im) im.remove(); }
+  try{
+    const r = await api("reset_cover", key);
+    setCover(key, r.found ? r.data_uri : null);
+  }catch(e){ if (thumb) thumb.classList.remove("loading"); }
+}
+
+el("ctxMenu").addEventListener("click", (e) => {
+  const act = e.target.dataset.act;
+  const g = CTX_GAME;
+  hideCtx();
+  if (!g) return;
+  if (act === "pick") openPicker(g);
+  else if (act === "reset") resetCover(g);
+});
+document.addEventListener("click", () => hideCtx());
+document.addEventListener("scroll", () => hideCtx(), true);
+
 // ── okno wyboru okładki ─────────────────────────────────────────────────────
 let PK_GAME = null;     // gra, dla której otwarto wybór
 let PK_TOK  = 0;        // token anulowania ładowania kandydatów
@@ -221,10 +256,12 @@ function renderCandidates(r){
   box.innerHTML = "";
   for (const c of cs){
     const it = document.createElement("div");
-    it.className = "pk-item";
-    it.title = `${c.w}×${c.h} ${c.style||""}`.trim();
+    it.className = "pk-item" + (c.square ? " sq" : "");
+    const dims = (c.w && c.h) ? `${c.w}×${c.h}` : "";
+    it.title = `${c.kind||""} ${dims} ${c.style||""}`.replace(/\s+/g," ").trim();
     it.innerHTML =
-      `<img src="${c.thumb}" alt=""><div class="meta">${c.w}×${c.h}${c.style?" · "+c.style:""}</div>`;
+      `<img src="${c.thumb}" alt="">
+       <div class="meta"><span class="kind kind-${c.kind||""}">${c.kind||""}</span>${dims?" "+dims:""}</div>`;
     it.onclick = () => chooseCover(c.url);
     box.appendChild(it);
   }

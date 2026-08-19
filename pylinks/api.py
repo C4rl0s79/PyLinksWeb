@@ -200,8 +200,18 @@ class Api:
         return {"key": key, "found": res.get("found", False),
                 "data_uri": res.get("data_uri")}
 
+    def reset_cover(self, key: str) -> dict:
+        """Przywraca automatyczną okładkę: usuwa wybór z cache + config,
+        pobiera na nowo (kwadrat → ikona → plakat)."""
+        art.clear_cover(CACHE_DIR, key)
+        self._save_selection(key, None)
+        g = self._find_game(key)
+        if not g:
+            return {"key": key, "found": False, "data_uri": None}
+        return art.fetch_cover(_load_config(), CACHE_DIR, key, g)
+
     # --- trwały zapis wyboru okładki (config.selected_icon_keys) ---
-    def _save_selection(self, key: str, url: str) -> None:
+    def _save_selection(self, key: str, url) -> None:
         try:
             raw = {}
             if CONFIG_PATH.exists():
@@ -211,7 +221,10 @@ class Api:
             sel = raw.get("selected_icon_keys")
             if not isinstance(sel, dict):
                 sel = {}
-            sel[key] = url
+            if url is None:
+                sel.pop(key, None)       # reset — usuń wybór
+            else:
+                sel[key] = url
             raw["selected_icon_keys"] = sel
             CONFIG_PATH.write_text(
                 json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")

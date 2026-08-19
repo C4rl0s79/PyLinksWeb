@@ -17,7 +17,9 @@ import re
 import urllib.request
 from pathlib import Path
 
-# preferowane wymiary okładek (portret) — ładna biblioteka jak w Steam
+# ikony = KWADRAT. Kwadratowe gridy do ikony:
+_SQUARE_DIMS = "512x512,1024x1024"
+# portret (plakaty) — pokazywane też w wyborze, ale po kwadratach
 _PORTRAIT_DIMS = "600x900,342x482,660x930,512x512,1024x1024"
 
 
@@ -124,6 +126,23 @@ class SgdbClient:
     def grids_for_appid(self, appid, per_page: int = 8, dims: str = _PORTRAIT_DIMS) -> list[dict]:
         return self._grids(f"grids/steam/{appid}", per_page, dims)
 
+    def _icons(self, path: str) -> list[dict]:
+        """Endpoint ikon SGDB (kwadratowe ikony gry, często z przezroczystością)."""
+        d = fetch_api(f"{self.BASE}/{path}", hdrs=self._hdr())
+        if not d:
+            return []
+        try:
+            obj = json.loads(d)
+            return obj.get("data", []) if obj.get("success", True) else []
+        except Exception:
+            return []
+
+    def icons_for_id(self, sgdb_id) -> list[dict]:
+        return self._icons(f"icons/game/{sgdb_id}")
+
+    def icons_for_appid(self, appid) -> list[dict]:
+        return self._icons(f"icons/steam/{appid}")
+
 
 # ── data-URI helpers ───────────────────────────────────────────────────────
 def _mime(data: bytes) -> str:
@@ -176,21 +195,26 @@ def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict) -> dict:
     if hit:
         return {"key": key, "found": True, "data_uri": hit, "cached": True}
 
-    # 2) sieć — SteamGridDB
+    # 2) sieć — SteamGridDB. Ikony są kwadratowe: preferuj KWADRAT → ikonę →
+    #    dopiero potem plakat (karta w GUI jest kwadratowa).
     sgdb_key = (cfg.get("api_keys", {}) or {}).get("sgdb_key", "")
     client = SgdbClient(sgdb_key)
     if not client.ok:
         return {"key": key, "found": False, "data_uri": None, "cached": False,
                 "reason": "brak klucza SGDB"}
 
-    grids: list[dict] = []
-    appid = game.get("appid")
-    if appid:
-        grids = client.grids_for_appid(appid)
-    if not grids:
-        results = client.search_with_fallback(game.get("name", ""))
-        if results:
-            grids = client.grids_for_id(results[0].get("id"))
+    ref = _resolve_ref(client, game, "")
+    if not ref:
+        return {"key": key, "found": False, "data_uri": None, "cached": False}
+    kind_id, val = ref
+    if kind_id == "appid":
+        grids = (client.grids_for_appid(val, dims=_SQUARE_DIMS)
+                 or client.icons_for_appid(val)
+                 or client.grids_for_appid(val, dims=""))
+    else:
+        grids = (client.grids_for_id(val, dims=_SQUARE_DIMS)
+                 or client.icons_for_id(val)
+                 or client.grids_for_id(val, dims=""))
     if not grids:
         return {"key": key, "found": False, "data_uri": None, "cached": False}
 
@@ -218,6 +242,16 @@ def _safe_key(key: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", key)[:180]
 
 
+def clear_cover(cache_dir: Path, key: str) -> None:
+    """Usuwa okładkę z cache dyskowego (reset do automatycznej)."""
+    d = _covers_dir(cache_dir)
+    for f in d.glob(_safe_key(key) + ".*"):
+        try:
+            f.unlink()
+        except Exception:
+            pass
+
+
 # ── wybór okładki: kandydaci + zapis ───────────────────────────────────────
 def parse_sgdb_ref(text: str) -> int | None:
     """Wyłuskuje SGDB game id z URL-a (…/game/12345) albo z gołej liczby."""
@@ -232,57 +266,97 @@ def parse_sgdb_ref(text: str) -> int | None:
     return None
 
 
-def candidates_for_game(cfg: dict, game: dict, query: str = "",
-                        limit: int = 18) -> list[dict]:
-    """Zwraca listę okładek-kandydatów dla okna wyboru.
+def _resolve_ref(client: SgdbClient, game: dict, query: str):
+    """Ustala co odpytać: ('appid', id) lub ('game', sgdb_id) albo None.
 
-    query pusty → auto (appid gry lub szukanie po nazwie).
-    query = URL/ID SGDB → gry po tym id.
-    query = tekst → szukanie po tej frazie.
-    Każdy kandydat: {id, url, thumb (data-URI), w, h, style}.
+    query pusty → appid gry, inaczej szukanie po nazwie.
+    query = URL/ID SGDB → to id. query = tekst → szukanie po frazie.
+    """
+    ref = parse_sgdb_ref(query)
+    if ref is not None:
+        return ("game", ref)
+    if query.strip():
+        res = client.search_with_fallback(query.strip())
+        return ("game", res[0].get("id")) if res else None
+    appid = game.get("appid")
+    if appid:
+        return ("appid", appid)
+    res = client.search_with_fallback(game.get("name", ""))
+    return ("game", res[0].get("id")) if res else None
+
+
+def candidates_for_game(cfg: dict, game: dict, query: str = "",
+                        limit: int = 24) -> list[dict]:
+    """Lista kandydatów do okna wyboru — IKONY + KWADRATY najpierw, potem plakaty.
+
+    Ikony są kwadratowe, więc dla skrótu-ikony to one są potrzebne. Zbieramy
+    z trzech źródeł SGDB i scalamy (dedup po id, zachowana kolejność):
+        1. /icons  (prawdziwe ikony gry)         → kind "ikona"
+        2. /grids 512x512,1024x1024 (kwadraty)   → kind "kwadrat"
+        3. /grids wszystkie wymiary (plakaty)    → kind "plakat"
+    Każdy kandydat: {id, url, thumb (data-URI), w, h, style, kind, square}.
     """
     client = SgdbClient((cfg.get("api_keys", {}) or {}).get("sgdb_key", ""))
     if not client.ok:
         return []
 
-    grids: list[dict] = []
-    ref = parse_sgdb_ref(query)
-    if ref is not None:
-        grids = client.grids_for_id(ref, per_page=limit, dims="")
-    elif query.strip():
-        results = client.search_with_fallback(query.strip())
-        if results:
-            grids = client.grids_for_id(results[0].get("id"), per_page=limit, dims="")
+    ref = _resolve_ref(client, game, query)
+    if not ref:
+        return []
+    kind_id, val = ref
+
+    icons: list[dict] = []
+    squares: list[dict] = []
+    posters: list[dict] = []
+    if kind_id == "appid":
+        icons = client.icons_for_appid(val)
+        squares = client.grids_for_appid(val, per_page=limit, dims=_SQUARE_DIMS)
+        posters = client.grids_for_appid(val, per_page=limit, dims="")
     else:
-        appid = game.get("appid")
-        if appid:
-            grids = client.grids_for_appid(appid, per_page=limit, dims="")
-        if not grids:
-            results = client.search_with_fallback(game.get("name", ""))
-            if results:
-                grids = client.grids_for_id(results[0].get("id"), per_page=limit, dims="")
+        icons = client.icons_for_id(val)
+        squares = client.grids_for_id(val, per_page=limit, dims=_SQUARE_DIMS)
+        posters = client.grids_for_id(val, per_page=limit, dims="")
+
+    merged: list[tuple[str, dict]] = []
+    seen: set[str] = set()
+    for kind, items in (("ikona", icons), ("kwadrat", squares), ("plakat", posters)):
+        for it in items:
+            i = str(it.get("id", ""))
+            if not i or i in seen:
+                continue
+            seen.add(i)
+            merged.append((kind, it))
 
     out: list[dict] = []
-    for g in grids[:limit]:
+    for kind, g in merged[:limit]:
         thumb_url = g.get("thumb") or g.get("url")
         if not thumb_url:
             continue
         data = fetch(thumb_url)
         if not data:
             continue
+        w, h = g.get("width", 0) or 0, g.get("height", 0) or 0
+        is_sq = (kind in ("ikona", "kwadrat")) or bool(
+            w and h and abs(int(w) - int(h)) <= 2)
         out.append({
             "id": str(g.get("id", "")),
             "url": g.get("url", ""),
             "thumb": _to_data_uri(data),
-            "w": g.get("width", 0),
-            "h": g.get("height", 0),
+            "w": w, "h": h,
             "style": (g.get("style") or ""),
+            "kind": kind,
+            "square": is_sq,
         })
     return out
 
 
-def suggest_games(cfg: dict, query: str, limit: int = 8) -> list[dict]:
-    """Podpowiedzi tytułów (autouzupełnianie SGDB) — {id, name, release}."""
+def suggest_games(cfg: dict, query: str, limit: int = 25) -> list[dict]:
+    """Podpowiedzi tytułów (autouzupełnianie SGDB) — {id, name, year}.
+
+    SGDB autocomplete zwraca do ~10 trafień posortowanych wg trafności —
+    NIE cappujemy poniżej tego (poprzednio limit 8 gubił 9./10. tytuł,
+    np. „Avatar: Frontiers of Pandora").
+    """
     query = (query or "").strip()
     if len(query) < 2:
         return []
