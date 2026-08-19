@@ -281,6 +281,28 @@ def candidates_for_game(cfg: dict, game: dict, query: str = "",
     return out
 
 
+def suggest_games(cfg: dict, query: str, limit: int = 8) -> list[dict]:
+    """Podpowiedzi tytułów (autouzupełnianie SGDB) — {id, name, release}."""
+    query = (query or "").strip()
+    if len(query) < 2:
+        return []
+    client = SgdbClient((cfg.get("api_keys", {}) or {}).get("sgdb_key", ""))
+    if not client.ok:
+        return []
+    out: list[dict] = []
+    for g in client.search(query, max_results=limit):
+        rel = g.get("release_date")
+        year = ""
+        try:
+            if rel:
+                from datetime import datetime, timezone
+                year = str(datetime.fromtimestamp(int(rel), timezone.utc).year)
+        except Exception:
+            year = ""
+        out.append({"id": g.get("id"), "name": g.get("name", ""), "year": year})
+    return out
+
+
 def save_chosen_cover(cache_dir: Path, key: str, full_url: str) -> dict:
     """Pobiera pełną okładkę z URL-a i zapisuje jako okładkę gry (nadpisuje).
 

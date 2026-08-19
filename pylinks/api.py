@@ -184,6 +184,14 @@ class Api:
         return {"key": key, "candidates": cands,
                 "reason": "" if cands else "brak wyników / brak klucza SGDB"}
 
+    def sgdb_suggest(self, query: str) -> list:
+        """Podpowiedzi tytułów (autouzupełnianie SGDB) dla pola szukania."""
+        return art.suggest_games(_load_config(), query)
+
+    def cover_candidates_by_id(self, key: str, sgdb_id) -> dict:
+        """Kandydaci dla konkretnego SGDB game id (klik w podpowiedź)."""
+        return self.cover_candidates(key, str(sgdb_id))
+
     def choose_cover(self, key: str, url: str) -> dict:
         """Ustawia wskazaną okładkę jako wybraną: zapis w cache + config."""
         res = art.save_chosen_cover(CACHE_DIR, key, url)
@@ -205,6 +213,29 @@ class Api:
                 sel = {}
             sel[key] = url
             raw["selected_icon_keys"] = sel
+            CONFIG_PATH.write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    # --- tryb dopasowania ikony (kwadrat): "pad" | "crop" ---
+    def get_fit_mode(self) -> str:
+        return _load_config().get("icon_fit_mode", "pad")
+
+    def set_fit_mode(self, mode: str) -> dict:
+        mode = "crop" if str(mode).lower() == "crop" else "pad"
+        self._save_config_value("icon_fit_mode", mode)
+        return {"ok": True, "mode": mode}
+
+    def _save_config_value(self, key: str, value) -> None:
+        """Read-modify-write pojedynczego klucza w config.json (reszta nietknięta)."""
+        try:
+            raw = {}
+            if CONFIG_PATH.exists():
+                raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            else:
+                raw = _default_config()
+            raw[key] = value
             CONFIG_PATH.write_text(
                 json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:

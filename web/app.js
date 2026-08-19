@@ -9,6 +9,13 @@ let PC_GAMES = [];      // ostatni skan PC (odchudzone wpisy z backendu)
 let CUR_SRC  = "";      // aktywny filtr źródła ("" = wszystkie)
 let FILTER   = "";      // filtr tekstowy nazwy
 let LOAD_TOK = 0;       // token anulowania leniwego ładowania okładek
+let FIT      = "pad";   // tryb dopasowania ikony (kwadrat): "pad" | "crop"
+
+function applyFit(){
+  el("grid").className = "grid fit-" + FIT;
+  const b = el("btnFit");
+  if (b) b.textContent = FIT === "crop" ? "⬛ Wypełnij" : "⬚ Całość";
+}
 
 function setBridge(ok, txt){
   const b = el("statBridge");
@@ -36,6 +43,8 @@ async function init(){
     el("statPaths").textContent =
       `root: ${info.paths.root}   •   config: ${info.config_exists ? "✓" : "domyślny"}`;
     setBridge(true, "OK");
+    try{ FIT = await api("get_fit_mode"); }catch(_){}
+    applyFit();
     await loadPlatforms();
   }catch(e){
     setBridge(false, "błąd: " + e.message);
@@ -181,11 +190,12 @@ function openPicker(game){
   el("pkTitle").textContent = "Okładka: " + game.name;
   el("pkSub").textContent = game.source ? game.source.toUpperCase() : "";
   el("pkQuery").value = "";
+  hideSuggest();
   el("picker").hidden = false;
   pkLoad("");
   el("pkQuery").focus();
 }
-function closePicker(){ el("picker").hidden = true; PK_GAME = null; PK_TOK++; }
+function closePicker(){ el("picker").hidden = true; PK_GAME = null; PK_TOK++; hideSuggest(); }
 
 async function pkLoad(query){
   if (!PK_GAME) return;
@@ -195,23 +205,28 @@ async function pkLoad(query){
   try{
     const r = await api("cover_candidates", PK_GAME.key, query || "");
     if (tok !== PK_TOK) return;
-    const cs = r.candidates || [];
-    if (!cs.length){
-      box.innerHTML = `<div class="pk-empty">${r.reason || "Brak wyników."}</div>`;
-      return;
-    }
-    box.innerHTML = "";
-    for (const c of cs){
-      const it = document.createElement("div");
-      it.className = "pk-item";
-      it.title = `${c.w}×${c.h} ${c.style||""}`.trim();
-      it.innerHTML =
-        `<img src="${c.thumb}" alt=""><div class="meta">${c.w}×${c.h}${c.style?" · "+c.style:""}</div>`;
-      it.onclick = () => chooseCover(c.url);
-      box.appendChild(it);
-    }
+    renderCandidates(r);
   }catch(e){
     if (tok === PK_TOK) box.innerHTML = `<div class="pk-empty">Błąd: ${e.message}</div>`;
+  }
+}
+
+function renderCandidates(r){
+  const box = el("pkGrid");
+  const cs = (r && r.candidates) || [];
+  if (!cs.length){
+    box.innerHTML = `<div class="pk-empty">${(r && r.reason) || "Brak wyników."}</div>`;
+    return;
+  }
+  box.innerHTML = "";
+  for (const c of cs){
+    const it = document.createElement("div");
+    it.className = "pk-item";
+    it.title = `${c.w}×${c.h} ${c.style||""}`.trim();
+    it.innerHTML =
+      `<img src="${c.thumb}" alt=""><div class="meta">${c.w}×${c.h}${c.style?" · "+c.style:""}</div>`;
+    it.onclick = () => chooseCover(c.url);
+    box.appendChild(it);
   }
 }
 
@@ -240,16 +255,87 @@ async function chooseCover(url){
   }catch(e){ box.innerHTML = `<div class="pk-empty">Błąd: ${e.message}</div>`; }
 }
 
+// ── podpowiedzi tytułów (autouzupełnianie SGDB) ──────────────────────────────
+let SUG_TOK = 0;        // token anulowania podpowiedzi
+let SUG_TIMER = null;   // debounce
+let SUG_ACTIVE = -1;    // indeks podświetlonej podpowiedzi
+
+function hideSuggest(){ el("pkSuggest").hidden = true; SUG_ACTIVE = -1; SUG_TOK++; }
+
+async function loadSuggest(q){
+  const tok = ++SUG_TOK;
+  if (q.length < 2){ hideSuggest(); return; }
+  try{
+    const list = await api("sgdb_suggest", q);
+    if (tok !== SUG_TOK) return;
+    renderSuggest(list || []);
+  }catch(_){ hideSuggest(); }
+}
+
+function renderSuggest(list){
+  const box = el("pkSuggest");
+  if (!list.length){ hideSuggest(); return; }
+  SUG_ACTIVE = -1;
+  box.innerHTML = "";
+  list.forEach((s, i) => {
+    const it = document.createElement("div");
+    it.className = "pk-sug"; it.dataset.i = i;
+    it.innerHTML = `<span>${s.name}</span>${s.year?`<span class="yr">${s.year}</span>`:""}`;
+    it.onclick = () => pickSuggest(s);
+    box.appendChild(it);
+  });
+  box.hidden = false;
+}
+
+function pickSuggest(s){
+  el("pkQuery").value = s.name;
+  hideSuggest();
+  pkLoadById(s.id);
+}
+
+async function pkLoadById(id){
+  if (!PK_GAME) return;
+  const tok = ++PK_TOK;
+  const box = el("pkGrid");
+  box.innerHTML = `<div class="pk-loading"><div class="spin"></div>Szukam okładek…</div>`;
+  try{
+    const r = await api("cover_candidates_by_id", PK_GAME.key, id);
+    if (tok !== PK_TOK) return;
+    renderCandidates(r);
+  }catch(e){ if (tok===PK_TOK) box.innerHTML = `<div class="pk-empty">Błąd: ${e.message}</div>`; }
+}
+
+function moveSuggest(delta){
+  const items = el("pkSuggest").querySelectorAll(".pk-sug");
+  if (!items.length) return;
+  SUG_ACTIVE = (SUG_ACTIVE + delta + items.length) % items.length;
+  items.forEach((n,i) => n.classList.toggle("active", i === SUG_ACTIVE));
+  items[SUG_ACTIVE].scrollIntoView({block:"nearest"});
+}
+
 el("pkClose").onclick = closePicker;
-el("pkSearch").onclick = () => pkLoad(el("pkQuery").value.trim());
+el("pkSearch").onclick = () => { hideSuggest(); pkLoad(el("pkQuery").value.trim()); };
+el("pkQuery").addEventListener("input", (e) => {
+  clearTimeout(SUG_TIMER);
+  const q = e.target.value.trim();
+  SUG_TIMER = setTimeout(() => loadSuggest(q), 220);
+});
 el("pkQuery").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") pkLoad(el("pkQuery").value.trim());
+  const open = !el("pkSuggest").hidden;
+  if (e.key === "ArrowDown" && open){ e.preventDefault(); moveSuggest(1); }
+  else if (e.key === "ArrowUp" && open){ e.preventDefault(); moveSuggest(-1); }
+  else if (e.key === "Enter"){
+    const items = el("pkSuggest").querySelectorAll(".pk-sug");
+    if (open && SUG_ACTIVE >= 0 && items[SUG_ACTIVE]){ items[SUG_ACTIVE].click(); }
+    else { hideSuggest(); pkLoad(el("pkQuery").value.trim()); }
+  }
+  else if (e.key === "Escape" && open){ e.stopPropagation(); hideSuggest(); }
 });
 el("picker").addEventListener("click", (e) => {
   if (e.target === el("picker")) closePicker();   // klik w tło zamyka
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !el("picker").hidden) closePicker();
+  if (e.key === "Escape" && !el("picker").hidden && el("pkSuggest").hidden) closePicker();
 });
 
 // ── zdarzenia ──────────────────────────────────────────────────────────────
@@ -259,6 +345,11 @@ el("btnPing").onclick = async () => {
   catch(e){ setBridge(false, e.message); }
 };
 el("btnSettings").onclick = () => alert("Ustawienia dojdą w Fazie 2.");
+el("btnFit").onclick = async () => {
+  FIT = (FIT === "crop") ? "pad" : "crop";
+  applyFit();
+  try{ await api("set_fit_mode", FIT); }catch(_){}
+};
 el("filter").oninput = (e) => { FILTER = e.target.value.trim(); renderPC(); };
 
 document.querySelectorAll(".src").forEach(b => b.onclick = () => {
