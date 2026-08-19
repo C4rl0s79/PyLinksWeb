@@ -91,7 +91,17 @@ async function showLinks(name, node){
     const games = await api("list_games", name);
     el("gridSub").textContent = `${games.length} skrótów`;
     grid.innerHTML = games.length ? "" : `<div class="welcome muted">Brak skrótów.</div>`;
-    for (const g of games) grid.appendChild(card(g.name, g.platform, "extra"));
+    for (const g of games){
+      const c = card(g.name, g.platform, (g.platform || "link").toLowerCase());
+      if (g.icon){
+        const thumb = c.querySelector(".thumb");
+        const ph = thumb.querySelector(".ph"); if (ph) ph.style.display = "none";
+        const img = document.createElement("img"); img.className = "cover";
+        img.src = g.icon; img.style.objectFit = "contain"; img.style.objectPosition = "center";
+        thumb.insertBefore(img, ph);
+      }
+      grid.appendChild(c);
+    }
   }catch(e){ grid.innerHTML = `<div class="welcome muted">Błąd: ${e.message}</div>`; }
 }
 

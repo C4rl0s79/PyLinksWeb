@@ -45,6 +45,63 @@ def _game_key(g: dict) -> str:
     return f"{src}::name::{(g.get('name') or '').strip().lower()}"
 
 
+def _ico_to_data_uri(ico_path: str) -> "str | None":
+    """Wczytuje .ico i zwraca największą klatkę jako PNG data-URI."""
+    try:
+        import base64
+        from io import BytesIO
+        from PIL import Image
+        p = ico_path.split(",")[0].strip().strip('"')   # usuń ',0' i cudzysłowy
+        im = Image.open(p)
+        # wybierz największy rozmiar z .ico
+        try:
+            sizes = im.info.get("sizes")
+            if sizes:
+                im.size = max(sizes)
+                im.load()
+        except Exception:
+            pass
+        im = im.convert("RGBA")
+        buf = BytesIO()
+        im.save(buf, "PNG")
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:
+        return None
+
+
+_ICON_URI_CACHE: dict = {}
+
+
+def _shortcut_icon_uri(f) -> "str | None":
+    """Ikona (.ico) wskazana przez skrót .lnk/.url → PNG data-URI (z cache)."""
+    key = str(f)
+    if key in _ICON_URI_CACHE:
+        return _ICON_URI_CACHE[key]
+    ico = ""
+    try:
+        if f.suffix.lower() == ".url":
+            for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if line.lower().startswith("iconfile="):
+                    ico = line.split("=", 1)[1].strip()
+                    break
+        else:  # .lnk
+            try:
+                import pythoncom, win32com.client  # type: ignore
+                pythoncom.CoInitialize()
+                try:
+                    sh = win32com.client.Dispatch("WScript.Shell")
+                    ico = sh.CreateShortcut(str(f)).IconLocation or ""
+                finally:
+                    pythoncom.CoUninitialize()
+            except Exception:
+                ico = ""
+    except Exception:
+        ico = ""
+    uri = _ico_to_data_uri(ico) if ico else None
+    _ICON_URI_CACHE[key] = uri
+    return uri
+
+
 def _slim_game(g: dict) -> dict:
     """Wpis gry dla frontendu — bez ciężkiego pola `content` (ACF)."""
     return {
@@ -139,7 +196,8 @@ class Api:
                 continue
             for f in sorted(d.iterdir()):
                 if f.suffix.lower() in (".lnk", ".url"):
-                    out.append({"name": f.stem, "platform": d.name})
+                    out.append({"name": f.stem, "platform": d.name,
+                                "icon": _shortcut_icon_uri(f)})
         return out
 
     # --- skan bibliotek PC (Steam/GOG/Epic/Extra) ---
@@ -242,6 +300,7 @@ class Api:
         if not games:
             return {"ok": False, "reason": "brak gier do eksportu", "created": 0}
         res = _exp.export_games(_load_config(), games, CACHE_DIR, LINKS_DIR)
+        _ICON_URI_CACHE.clear()          # świeże ikony w widoku LINKS po eksporcie
         res["links_dir"] = str(LINKS_DIR)
         return res
 
