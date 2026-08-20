@@ -481,7 +481,7 @@ function openPicker(game){
   pkLoad("");
   el("pkQuery").focus();
 }
-function closePicker(){ el("picker").hidden = true; PK_GAME = null; PK_TOK++; hideSuggest(); }
+function closePicker(){ el("picker").hidden = true; PK_GAME = null; PK_TOK++; hideSuggest(); el("pkProgress").hidden = true; }
 
 let PK_QUERY = "";      // ostatnie zapytanie (do przycisku Odśwież)
 async function pkLoad(query){
@@ -520,6 +520,7 @@ function renderSteamOptions(opt){
   }
   box.innerHTML = "";
   const cur = opt.current || {};
+  pkProgReset(STEAM_SECTIONS.reduce((n,[a]) => n + ((opt[a]||[]).length), 0));
   for (const [asset, label] of STEAM_SECTIONS){
     const list = opt[asset] || [];
     const sec = document.createElement("div");
@@ -536,7 +537,8 @@ function renderSteamOptions(opt){
         const dims = (v.w && v.h) ? `${v.w}×${v.h}` : "";
         it.title = `${dims} ${v.style||""}`.trim();
         if (cur[asset] && cur[asset] === v.url) it.classList.add("chosen");
-        it.innerHTML = `<img src="${v.thumb}" alt="" onerror="this.closest('.pk-item').classList.add('broken')">${dims?`<div class="meta">${dims}</div>`:""}`;
+        it.appendChild(pkImg(v.thumb));
+        if (dims){ const m=document.createElement("div"); m.className="meta"; m.textContent=dims; it.appendChild(m); }
         it.onclick = () => chooseSteamAsset(asset, v.url, it);
         row.appendChild(it);
       }
@@ -569,23 +571,53 @@ async function chooseSteamAsset(asset, url, itEl){
   }catch(e){ itEl.classList.remove("busy"); }
 }
 
+// ── pasek postępu ładowania miniatur ────────────────────────────────────────
+let PK_PROG = {total: 0, loaded: 0};
+function pkProgReset(total){
+  PK_PROG = {total, loaded: 0};
+  el("pkProgress").hidden = total <= 0;
+  pkProgUpdate();
+}
+function pkProgUpdate(){
+  const {total, loaded} = PK_PROG;
+  el("pkBarFill").style.width = total ? Math.round(loaded / total * 100) + "%" : "0%";
+  el("pkBarTxt").textContent = total ? `${loaded}/${total} grafik` : "";
+  if (total && loaded >= total) setTimeout(() => { el("pkProgress").hidden = true; }, 500);
+}
+function pkImg(url){
+  const img = document.createElement("img"); img.alt = "";
+  img.onload = () => { PK_PROG.loaded++; pkProgUpdate(); };
+  img.onerror = async () => {
+    try{ const r = await api("fetch_thumb", url);   // fallback serwerowy
+         if (r && r.data_uri){ img.onerror = null; img.src = r.data_uri; return; } }catch(_){}
+    const it = img.closest(".pk-item"); if (it) it.classList.add("broken");
+    PK_PROG.loaded++; pkProgUpdate();
+  };
+  img.src = url;
+  return img;
+}
+
 function renderCandidates(r){
   const box = el("pkGrid");
   box.classList.remove("steam");
   const cs = (r && r.candidates) || [];
   if (!cs.length){
+    pkProgReset(0);
     box.innerHTML = `<div class="pk-empty">${(r && r.reason) || "Brak wyników."}</div>`;
     return;
   }
   box.innerHTML = "";
+  pkProgReset(cs.length);
   for (const c of cs){
     const it = document.createElement("div");
     it.className = "pk-item" + (c.square ? " sq" : "");
     const dims = (c.w && c.h) ? `${c.w}×${c.h}` : "";
     it.title = `${c.kind||""} ${dims} ${c.style||""}`.replace(/\s+/g," ").trim();
-    it.innerHTML =
-      `<img src="${c.thumb}" alt="" onerror="this.closest('.pk-item').classList.add('broken')">
-       <div class="meta"><span class="kind kind-${c.kind||""}">${c.kind||""}</span>${dims?" "+dims:""}</div>`;
+    it.appendChild(pkImg(c.thumb));
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.innerHTML = `<span class="kind kind-${c.kind||""}">${c.kind||""}</span>${dims?" "+dims:""}`;
+    it.appendChild(meta);
     it.onclick = () => chooseCover(c.url);
     box.appendChild(it);
   }

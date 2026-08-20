@@ -35,19 +35,13 @@ def fetch_post(url: str, body: bytes, hdrs: dict | None = None,
         return None
 
 
-def _cand(kind: str, url: str, data: bytes, style: str, rid: str) -> dict | None:
-    if not data:
+def _cand(kind: str, url: str, style: str, rid: str) -> dict | None:
+    """META kandydata (URL miniatury — bez pobierania)."""
+    if not url:
         return None
-    w = h = 0
-    if PIL_OK:
-        try:
-            w, h = Image.open(BytesIO(data)).size
-        except Exception:
-            return None
     return {
-        "id": rid, "url": url, "thumb": _to_data_uri(data),
-        "w": w, "h": h, "style": style, "kind": kind,
-        "square": bool(w and h and abs(w - h) <= max(2, min(w, h) // 8)),
+        "id": rid, "url": url, "thumb": url,
+        "w": 0, "h": 0, "style": style, "kind": kind, "square": False,
     }
 
 
@@ -83,8 +77,7 @@ class ExtraArtSources:
         ]
         out = []
         for url, label in urls:
-            c = _cand("steam", url, fetch(url, timeout=8), label,
-                      f"steamcdn_{appid}_{url.split('/')[-1]}")
+            c = _cand("steam", url, label, f"steamcdn_{appid}_{url.split('/')[-1]}")
             if c:
                 out.append(c)
         return out
@@ -152,14 +145,10 @@ class ExtraArtSources:
             game = max(named, key=_sim)
 
         def _img(raw_url, rid):
-            for size in ("t_1080p", "t_cover_big", "t_720p"):
-                url = raw_url.replace("t_thumb", size)
-                if not url.startswith("http"):
-                    url = "https:" + url
-                data = fetch(url, timeout=10)
-                if data:
-                    return _cand("igdb", url, data, "igdb", rid)
-            return None
+            url = raw_url.replace("t_thumb", "t_1080p")
+            if not url.startswith("http"):
+                url = "https:" + url
+            return _cand("igdb", url, "igdb", rid)
 
         out = []
         cover = game.get("cover")
@@ -230,8 +219,7 @@ class ExtraArtSources:
             if itype == "boxart" and side not in ("", "front"):
                 continue
             full = base_url + fn
-            c = _cand("tgdb", full, fetch(full, timeout=10), f"tgdb-{itype}",
-                      f"tgdb_{gid}_{img.get('id', '')}")
+            c = _cand("tgdb", full, f"tgdb-{itype}", f"tgdb_{gid}_{img.get('id', '')}")
             if c:
                 out.append(c)
         return out

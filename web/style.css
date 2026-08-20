@@ -246,6 +246,11 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 .pk-sug:last-child{border-bottom:0}
 .pk-sug:hover,.pk-sug.active{background:var(--bg3)}
 .pk-sug .yr{color:var(--fg2); font-size:11px; margin-left:auto}
+.pk-progress{display:flex;align-items:center;gap:10px;padding:8px 18px 0}
+.pk-progress[hidden]{display:none}
+.pk-bar{flex:1;height:6px;background:var(--bg3);border-radius:999px;overflow:hidden}
+.pk-bar-fill{height:100%;width:0;background:var(--acc);transition:width .15s ease}
+.pk-bar-txt{font-size:11px;white-space:nowrap}
 .pk-grid{
   flex:1 1 auto; min-height:0; overflow-y:auto;      /* scroll siatki kandydatów */
   padding:16px 18px; display:grid; gap:12px; justify-content:start;

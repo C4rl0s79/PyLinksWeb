@@ -432,15 +432,14 @@ def candidates_for_game(cfg: dict, game: dict, query: str = "",
         return (client.icons_for_appid(val) if kind_id == "appid"
                 else client.icons_for_id(val))
 
-    # ikony + kwadraty + POSTERY. Każdy rodzaj ma WŁASNĄ pulę, żeby dużo ikon
-    # nie wypychało kwadratów/plakatów (picker się przewija, więc jest miejsce).
+    # ikony + kwadraty + POSTERY. Każdy rodzaj ma WŁASNĄ pulę. Zwracamy META
+    # (URL miniatury), BEZ pobierania — przeglądarka ładuje równolegle z paskiem.
     kind_prio = {"ikona": 0, "kwadrat": 1, "plakat": 2}
     kind_cap = {"ikona": 30, "kwadrat": 24, "plakat": 24}
     groups = [("ikona", _icons()),
               ("kwadrat", _grids(_SQUARE_DIMS)),
               ("plakat", _grids(_STEAM_DIMS))]
 
-    # zbierz unikaty, pobierz miniatury, ZMIERZ realny rozmiar (PIL)
     seen: set[str] = set()
     out: list[dict] = []
     for kind, items in groups:
@@ -451,31 +450,31 @@ def candidates_for_game(cfg: dict, game: dict, query: str = "",
             i = str(it.get("id", ""))
             if not i or i in seen:
                 continue
-            seen.add(i)
             thumb_url = it.get("thumb") or it.get("url")
             if not thumb_url:
                 continue
-            data = fetch(thumb_url)
-            if not data:
-                continue
-            w, h = it.get("width", 0) or 0, it.get("height", 0) or 0
-            if PIL_OK:
-                try:
-                    w, h = Image.open(BytesIO(data)).size
-                except Exception:
-                    pass
+            seen.add(i)
             got += 1
+            w, h = it.get("width", 0) or 0, it.get("height", 0) or 0
             out.append({
-                "id": i, "url": it.get("url", ""), "thumb": _to_data_uri(data),
+                "id": i, "url": it.get("url", ""), "thumb": thumb_url,
                 "w": w, "h": h, "style": (it.get("style") or ""),
                 "kind": kind,
                 "square": (kind in ("ikona", "kwadrat")) or bool(
                     w and h and abs(int(w) - int(h)) <= 2),
             })
-    # sort: najpierw rodzaj (ikona→kwadrat→plakat), w obrębie rodzaju duże pierwsze
     out.sort(key=lambda c: (kind_prio.get(c["kind"], 9),
                             -(min(c["w"], c["h"]) if (c["w"] and c["h"]) else 0)))
     return out
+
+
+def fetch_thumb_uri(url: str) -> "str | None":
+    """Fallback: pobiera miniaturę serwerowo → data-URI (gdy przeglądarka
+    nie może wczytać zdalnego URL-a)."""
+    if not url:
+        return None
+    data = fetch(url)
+    return _to_data_uri(data) if data else None
 
 
 # ── tryb Steam: kilka typów grafik (grid + hero/tło + logo) ────────────────
@@ -483,17 +482,15 @@ _STEAM_ASSETS = ("grid", "hero", "logo")
 
 
 def _dl_variants(items: list[dict], limit: int) -> list[dict]:
-    """Pobiera miniatury wariantów jako data-URI (z URL-em pełnym do wyboru)."""
+    """META wariantów: URL miniatury + pełny URL (bez pobierania — pasek postępu
+    ładuje w przeglądarce)."""
     out: list[dict] = []
     for a in items[:limit]:
         turl = a.get("thumb") or a.get("url")
         if not turl:
             continue
-        data = fetch(turl)
-        if not data:
-            continue
         out.append({
-            "url": a.get("url", ""), "thumb": _to_data_uri(data),
+            "url": a.get("url", ""), "thumb": turl,
             "w": a.get("width", 0) or 0, "h": a.get("height", 0) or 0,
             "style": (a.get("style") or ""),
         })

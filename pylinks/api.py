@@ -455,6 +455,11 @@ class Api:
         return {"key": key, "candidates": cands,
                 "reason": "" if cands else "brak wyników / brak klucza SGDB"}
 
+    def fetch_thumb(self, url: str) -> dict:
+        """Fallback: pobiera miniaturę serwerowo → data-URI (gdy przeglądarka
+        nie wczyta zdalnego URL-a)."""
+        return {"url": url, "data_uri": art.fetch_thumb_uri(url)}
+
     def sgdb_suggest(self, query: str) -> list:
         """Podpowiedzi tytułów (autouzupełnianie SGDB) dla pola szukania."""
         return art.suggest_games(_load_config(), query)
