@@ -154,7 +154,10 @@ async function scanRomsUI(){
 }
 
 function showRoms(system, node){
-  clearActive(); if (node) node.classList.add("active"); LOAD_TOK++;
+  clearActive();
+  if (!node) node = [...document.querySelectorAll("#romSystems .plat-item")]
+    .find(b => b.querySelector("span") && b.querySelector("span").textContent === system);
+  if (node) node.classList.add("active"); LOAD_TOK++;
   el("filter").hidden = true;
   el("gridTitle").textContent = "ROM / " + system;
   const games = ROM_GAMES.filter(g => g.system === system);
@@ -166,7 +169,8 @@ function showRoms(system, node){
   const grid = el("grid"); grid.innerHTML = "";
   for (const g of games){
     const c = card(g.name, g.system, "rom", g);
-    if (SPINE.enabled && SYS_LOGO[g.system]) addSpine(c, SYS_LOGO[g.system], SPINE.side);
+    // grzbiet tylko w trybie IKON (Steam = portret bez grzbietu)
+    if (MODE === "icon" && SPINE.enabled && SYS_LOGO[g.system]) addSpine(c, SYS_LOGO[g.system], SPINE.side);
     grid.appendChild(c);
   }
   updateSelCount();
@@ -951,8 +955,9 @@ el("cardSize").onchange = (e) => { try{ api("set_thumb_size", +e.target.value); 
 el("btnMode").onclick = () => {
   MODE = (MODE === "steam") ? "icon" : "steam";
   applyFit();
-  // grafiki różnią się per tryb — przeładuj okładki widocznych gier
-  if (PC_GAMES.length) renderPC();
+  // grafiki i grzbiety różnią się per tryb — przeładuj bieżący widok
+  if (CURRENT_VIEW && CURRENT_VIEW.type === "rom") showRoms(CURRENT_VIEW.filter);
+  else if (PC_GAMES.length) renderPC();
 };
 el("filter").oninput = (e) => { FILTER = e.target.value.trim(); renderPC(); };
 
