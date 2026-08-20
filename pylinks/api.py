@@ -380,6 +380,21 @@ class Api:
                  if _game_key(g) in want]
         return self._export(games)
 
+    def export_steam(self, keys: list) -> dict:
+        """Dodaje wskazane gry do biblioteki Steam (shortcuts.vdf + grafiki +
+        kolekcje per platforma). Wymaga ZAMKNIĘTEGO Steama."""
+        from pylinks.services import steam_export as _se
+        want = set(keys or [])
+        games = [g for g in (self._pc_games + self._rom_games)
+                 if _game_key(g) in want]
+        if not games:
+            return {"ok": False, "reason": "brak gier"}
+        return _se.export_to_steam(_load_config(), games, CACHE_DIR)
+
+    def steam_running(self) -> dict:
+        from pylinks.services import steam_export as _se
+        return {"running": _se.is_steam_running()}
+
     def _export(self, games: list) -> dict:
         from pylinks.services import export as _exp
         if not games:

@@ -24,6 +24,8 @@ function applyFit(){
   if (bf){ bf.textContent = FIT === "crop" ? "⬛ Wypełnij" : "⬚ Całość"; bf.hidden = (MODE !== "icon"); }
   const bm = el("btnMode");
   if (bm) bm.textContent = MODE === "steam" ? "🖼 Tryb: Steam" : "🖼 Tryb: Ikony";
+  const be = el("btnExport");
+  if (be) be.textContent = MODE === "steam" ? "📦 Do Steam" : "📦 Utwórz skróty";
 }
 
 function setBridge(ok, txt){
@@ -926,8 +928,31 @@ el("selMissing").onclick = async () => {
 el("btnExport").onclick = async () => {
   if (!CURRENT_VIEW) return;
   if (SELECTED.size === 0){ alert("Nie zaznaczono żadnej gry."); return; }
-  if (!confirm(`Utworzyć skróty (.lnk/.url) z ikonami dla ${SELECTED.size} zaznaczonych gier?\nTrafią do LINKS/<platforma>/.`)) return;
   const b = el("btnExport"); const old = b.textContent;
+  if (MODE === "steam"){
+    // ostrzeż, gdy Steam działa (nadpisze shortcuts.vdf przy zamknięciu)
+    let running = false;
+    try{ running = (await api("steam_running")).running; }catch(_){}
+    let m = `Dodać ${SELECTED.size} gier do biblioteki Steam?\n(grafiki grid/hero/logo + kolekcje per platforma)`;
+    if (running) m += `\n\n⚠ Steam JEST URUCHOMIONY — zamknij go CAŁKOWICIE, inaczej zmiany zostaną nadpisane.`;
+    if (!confirm(m)) return;
+    b.disabled = true; b.textContent = "⏳ Do Steam…";
+    try{
+      const r = await api("export_steam", [...SELECTED]);
+      if (r.ok){
+        let msg = `Dodano ${r.added} gier do Steam (grafik: ${r.art}).\nProfil: ${r.config_dir}`;
+        const c = r.collections || {};
+        if (c.created && c.created.length) msg += `\nKolekcje: +${c.created.join(", ")}`;
+        if (c.updated && c.updated.length) msg += `\nZaktualizowane: ${c.updated.join(", ")}`;
+        if (c.error) msg += `\nKolekcje: ${c.error}`;
+        if (r.steam_running) msg += `\n\n⚠ Steam był uruchomiony — uruchom go ponownie, by zobaczyć zmiany (mogły zostać nadpisane, jeśli był otwarty).`;
+        alert(msg);
+      }else alert("Steam: " + (r.reason || "nie powiodło się"));
+    }catch(e){ alert("Błąd eksportu Steam: " + e.message); }
+    finally{ b.disabled = false; b.textContent = old; }
+    return;
+  }
+  if (!confirm(`Utworzyć skróty (.lnk/.url) z ikonami dla ${SELECTED.size} zaznaczonych gier?\nTrafią do LINKS/<platforma>/.`)) return;
   b.disabled = true; b.textContent = "⏳ Tworzę…";
   try{
     const r = await api("export_keys", [...SELECTED]);
