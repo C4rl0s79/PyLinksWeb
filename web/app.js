@@ -280,9 +280,9 @@ function setCover(key, dataUri, fit, offset){
   img.className = "cover";
   img.alt = ""; styleCover(img, fit, offset); img.src = dataUri;
   c.insertBefore(img, ph);
-  // karta z grzbietem: plakat wypełnia wcięty obszar (portret + grzbiet = kwadrat)
+  // karta z grzbietem: plakat W CAŁOŚCI (contain), bez ucinania góry/dołu
   if (c.classList.contains("spine-left") || c.classList.contains("spine-right")){
-    img.style.objectFit = "cover"; img.style.objectPosition = "center";
+    img.style.objectFit = "contain"; img.style.objectPosition = "center";
   }
 }
 

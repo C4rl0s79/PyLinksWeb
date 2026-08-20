@@ -7,4 +7,4 @@ importuje stąd te symbole zwrotnie (compatibility bridge). Zachowanie i formaty
 bez zmian.
 """
 
-__version__ = "8.9.4"
+__version__ = "8.9.5"

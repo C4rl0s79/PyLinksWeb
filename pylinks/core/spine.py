@@ -120,8 +120,9 @@ def _cover(im, tw, th):
 
 def add_platform_spine(img, system: str, side: str = "left",
                        frac: float = 0.22, logo_dir: str = ""):
-    """Kwadratowa ikona = grzbiet (frac szerokości) + grafika WYPEŁNIAJĄCA resztę
-    (cover). DOKŁADNIE jak podgląd CSS w GUI. Bez logo/PIL — zwraca bez zmian."""
+    """Kwadratowa ikona = STAŁY grzbiet (frac szerokości) + grafika w CAŁOŚCI
+    (contain, proporcjonalnie — bez ucinania góry/dołu, bez zniekształceń).
+    Kwadratowa ikona też OK (zwężona, wyśrodkowana). Bez logo/PIL — zwraca img."""
     if not _PIL or not system:
         return img
     logo = _platform_logo_pil(logo_dir, system)
@@ -129,13 +130,17 @@ def add_platform_spine(img, system: str, side: str = "left",
         return img
     try:
         base = img.convert("RGBA")
-        if min(base.size) < 24:
+        W0, H0 = base.size
+        if min(W0, H0) < 24:
             return base
-        S = 512                                   # bok kwadratu (jakość; .ico zejdzie do 256)
-        sw = max(14, int(round(S * frac)))        # szerokość grzbietu (22%)
-        aw = S - sw                               # obszar grafiki
-        artimg = _cover(base, aw, S)              # grafika WYPEŁNIA (cover)
+        _LONG = 512
+        r = _LONG / max(W0, H0)
+        base = base.resize((max(1, round(W0 * r)), max(1, round(H0 * r))), Image.LANCZOS)
+        W, H = base.size
+        S = max(W, H)
         logo = _ensure_logo_contrast(logo)
+
+        sw = max(14, int(round(S * frac)))    # STAŁY grzbiet (nie zależy od plakatu)
 
         from PIL import ImageDraw
         spine = Image.new("RGBA", (sw, S), _hex_rgba("#141414"))
@@ -156,10 +161,15 @@ def add_platform_spine(img, system: str, side: str = "left",
         spine.alpha_composite(lg, ((sw - lg.width) // 2, (S - lg.height) // 2))
 
         out = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-        if side == "left":
-            out.alpha_composite(artimg, (sw, 0)); out.alpha_composite(spine, (0, 0))
-        else:
-            out.alpha_composite(artimg, (0, 0)); out.alpha_composite(spine, (S - sw, 0))
+        if True:
+            # grafika W CAŁOŚCI (contain) w obszarze (S-sw) × S — proporcjonalnie
+            aw = S - sw
+            sc = min(aw / W, S / H)
+            nw, nh = max(1, round(W * sc)), max(1, round(H * sc))
+            art = base.resize((nw, nh), Image.LANCZOS)
+            ax = sw + (aw - nw) // 2 if side == "left" else (aw - nw) // 2
+            out.alpha_composite(art, (ax, (S - nh) // 2))
+        out.alpha_composite(spine, (0, 0) if side == "left" else (S - sw, 0))
         return out
     except Exception:
         return img
