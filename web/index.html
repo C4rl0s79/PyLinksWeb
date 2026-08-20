@@ -83,6 +83,7 @@
     <button class="ctx-item" data-act="crop">✂ Kadruj (przeciągnij)</button>
     <button class="ctx-item" data-act="frame">▦ Ramki</button>
     <button class="ctx-item" data-act="default">↺ Domyślne</button>
+    <button class="ctx-item" data-act="exe" hidden>📄 Wskaż plik .exe…</button>
   </div>
 
   <!-- Kolekcje serii -->
@@ -139,8 +140,13 @@
           <h3>Skan PC</h3>
           <label>Steam.exe <span class="inln"><input id="s_steamexe" type="text" spellcheck="false"><button class="btn ghost mini" data-file="s_steamexe">📁</button><button class="btn ghost" id="s_detect">Wykryj</button></span></label>
           <label>Folder „Extra" <span class="inln"><input id="s_extradir" type="text" spellcheck="false"><button class="btn ghost mini" data-folder="s_extradir">📁</button></span></label>
+          <label>Dodatkowe foldery Extra (po jednym w linii)
+            <textarea id="s_extradirs" rows="2" spellcheck="false"></textarea></label>
+          <label>Dodatkowe biblioteki Steam (steamapps, po jednym w linii)
+            <textarea id="s_steamlibs" rows="2" spellcheck="false"></textarea></label>
           <label class="chk"><input id="s_epic" type="checkbox"> Skanuj Epic</label>
           <label class="chk"><input id="s_gog" type="checkbox"> Skanuj GOG</label>
+          <label class="chk"><input id="s_owned" type="checkbox"> Steam: dołącz posiadane (nie tylko zainstalowane)</label>
         </section>
 
         <section class="set-sec">
@@ -155,6 +161,7 @@
         <section class="set-sec">
           <h3>Źródła dodatkowe</h3>
           <label class="chk"><input id="s_steamcdn" type="checkbox"> Steam CDN (bez klucza)</label>
+          <label class="chk"><input id="s_libretro" type="checkbox"> Libretro (box art dla ROM-ów, bez klucza)</label>
           <label class="chk"><input id="s_igdb" type="checkbox"> IGDB</label>
           <label>IGDB Client ID <input id="s_igdbid" type="password" autocomplete="off" spellcheck="false"></label>
           <label>IGDB Client Secret <input id="s_igdbsec" type="password" autocomplete="off" spellcheck="false"></label>

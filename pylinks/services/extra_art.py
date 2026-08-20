@@ -45,6 +45,45 @@ def _cand(kind: str, url: str, style: str, rid: str) -> dict | None:
     }
 
 
+LIBRETRO_BASE = "https://raw.githubusercontent.com/libretro-thumbnails"
+LIBRETRO_SYSTEM_MAP = {
+    "PS1": "Sony_-_PlayStation", "PS2": "Sony_-_PlayStation_2",
+    "PS3": "Sony_-_PlayStation_3", "PSP": "Sony_-_PlayStation_Portable",
+    "N64": "Nintendo_-_Nintendo_64",
+    "SNES": "Nintendo_-_Super_Nintendo_Entertainment_System",
+    "SNESMSU1": "Nintendo_-_Super_Nintendo_Entertainment_System",
+    "NES": "Nintendo_-_Nintendo_Entertainment_System",
+    "GB": "Nintendo_-_Game_Boy", "GBA": "Nintendo_-_Game_Boy_Advance",
+    "GBC": "Nintendo_-_Game_Boy_Color", "NDS": "Nintendo_-_Nintendo_DS",
+    "GCN": "Nintendo_-_GameCube", "WII": "Nintendo_-_Wii",
+    "SATURN": "Sega_-_Saturn", "DC": "Sega_-_Dreamcast",
+    "NAOMI": "Sega_-_Dreamcast", "NAOMI2": "Sega_-_Dreamcast",
+    "MD": "Sega_-_Mega_Drive_-_Genesis", "SEGACD": "Sega_-_Mega_Drive_-_Genesis",
+    "SMS": "Sega_-_Master_System_-_Mark_III", "GG": "Sega_-_Game_Gear",
+    "ARCADE": "MAME", "MAME": "MAME", "NEOGEO": "SNK_-_Neo_Geo",
+    "NGP": "SNK_-_Neo_Geo_Pocket", "ATARI2600": "Atari_-_2600",
+    "ATARI7800": "Atari_-_7800", "3DO": "3DO_Interactive_Multiplayer",
+    "PCENGINE": "NEC_-_PC_Engine_-_TurboGrafx_16",
+}
+
+
+def libretro_candidates(system: str, title: str) -> list:
+    """Box art / snap / title ze zbiorów Libretro Thumbnails (GitHub, bez klucza)."""
+    repo = LIBRETRO_SYSTEM_MAP.get((system or "").upper(), "")
+    if not repo or not title:
+        return []
+    import urllib.request as _u
+    enc = _u.quote(title, safe=" -.'()!").replace(" ", "%20")
+    out = []
+    for folder, kind in (("Named_Boxarts", "boxart"), ("Named_Titles", "title"),
+                         ("Named_Snaps", "snap")):
+        url = f"{LIBRETRO_BASE}/{repo}/master/{folder}/{enc}.png"
+        out.append({"id": f"libretro_{repo}_{folder}", "url": url, "thumb": url,
+                    "w": 0, "h": 0, "style": f"libretro-{kind}",
+                    "kind": "libretro", "square": False})
+    return out
+
+
 class ExtraArtSources:
     IGDB_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
     IGDB_API_URL = "https://api.igdb.com/v4"

@@ -220,11 +220,11 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 .set-sec h3{margin:0 0 2px;font-size:14px;color:var(--acc)}
 .set-sec label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--fg2)}
 .set-sec label.chk{flex-direction:row;align-items:center;gap:8px;color:var(--fg);font-size:13px;cursor:pointer}
-.set-sec input[type=text],.set-sec select{
+.set-sec input[type=text],.set-sec select,.set-sec textarea{
   background:var(--bg2);color:var(--fg);border:1px solid var(--bg3);border-radius:7px;
-  padding:7px 10px;font-size:13px;outline:none;
+  padding:7px 10px;font-size:13px;outline:none;font-family:inherit;resize:vertical;
 }
-.set-sec input[type=text]:focus,.set-sec select:focus{border-color:var(--acc)}
+.set-sec input[type=text]:focus,.set-sec select:focus,.set-sec textarea:focus{border-color:var(--acc)}
 .set-sec .inln{display:flex;gap:8px}
 .set-sec .inln input{flex:1}
 .set-foot{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:12px 20px;border-top:1px solid var(--bg3);background:var(--bg2)}

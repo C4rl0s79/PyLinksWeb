@@ -360,6 +360,9 @@ let CTX_GAME = null;
 function showCtx(x, y, game){
   CTX_GAME = game;
   const m = el("ctxMenu");
+  // „Wskaż .exe" tylko dla gier Extra/GOG (ich skrót celuje w plik)
+  const exeBtn = m.querySelector('[data-act="exe"]');
+  if (exeBtn) exeBtn.hidden = !(game.source === "extra" || game.source === "gog");
   m.hidden = false;
   // trzymaj w oknie
   const w = m.offsetWidth || 200, h = m.offsetHeight || 80;
@@ -387,7 +390,16 @@ el("ctxMenu").addEventListener("click", (e) => {
   else if (act === "crop") openCropWindow(g);             // okno z przeciąganiem
   else if (act === "frame") setCropMode(g, "pad", 0.5);   // Ramki
   else if (act === "default") cropDefault(g);             // Domyślne
+  else if (act === "exe") pickExe(g);                     // ręczny .exe
 });
+
+async function pickExe(game){
+  try{
+    const r = await api("pick_file", game.game_dir || "");
+    if (r.path){ await api("set_exe_override", game.key, r.path);
+      alert("Plik uruchamiający ustawiony:\n" + r.path); }
+  }catch(e){}
+}
 
 // Ramki / ustawienie fit bez okna
 async function setCropMode(game, fit, offset){
@@ -775,8 +787,12 @@ async function openSettings(){
   el("s_usewebapi").checked = !!cfg.use_steam_web_api;
   el("s_steamexe").value = cfg.steam_exe || "";
   el("s_extradir").value = cfg.extra_dir || "";
+  el("s_extradirs").value = (cfg.extra_dirs_list || []).join("\n");
+  el("s_steamlibs").value = (cfg.steam_lib_dirs || []).join("\n");
   el("s_epic").checked = cfg.scan_epic !== false;
   el("s_gog").checked = cfg.scan_gog !== false;
+  el("s_owned").checked = !!cfg.steam_include_owned;
+  el("s_libretro").checked = (cfg.extra_sources || {}).libretro !== false;
   el("s_spine").checked = !!cfg.icon_platform_spine;
   el("s_spineside").value = cfg.icon_spine_side || "left";
   el("s_logodir").value = cfg.platform_logo_dir || "";
@@ -1001,10 +1017,14 @@ el("setSave").onclick = async () => {
     api_keys: {sgdb_key: sv("s_sgdb"), steam_api_key: sv("s_steamkey"), steam_id64: sv("s_steamid")},
     use_steam_web_api: sc("s_usewebapi"),
     steam_exe: sv("s_steamexe"), extra_dir: sv("s_extradir"),
+    extra_dirs_list: el("s_extradirs").value.split("\n").map(s=>s.trim()).filter(Boolean),
+    steam_lib_dirs: el("s_steamlibs").value.split("\n").map(s=>s.trim()).filter(Boolean),
     scan_epic: sc("s_epic"), scan_gog: sc("s_gog"),
+    steam_include_owned: sc("s_owned"),
     icon_platform_spine: sc("s_spine"), icon_spine_side: el("s_spineside").value,
     platform_logo_dir: sv("s_logodir"),
-    extra_sources: {steam_cdn: sc("s_steamcdn"), igdb: sc("s_igdb"),
+    extra_sources: {steam_cdn: sc("s_steamcdn"), libretro: sc("s_libretro"),
+      igdb: sc("s_igdb"),
       igdb_client_id: sv("s_igdbid"), igdb_client_secret: sv("s_igdbsec"),
       tgdb: sc("s_tgdb"), tgdb_key: sv("s_tgdbkey")},
     rom_support: {enabled: sc("s_romen"), base_rom_dir: sv("s_baserom"),

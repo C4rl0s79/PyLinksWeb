@@ -223,6 +223,25 @@ class Api:
             "thumb_size": int(cfg.get("thumb_size", 160) or 160),
         }
 
+    def set_exe_override(self, key: str, path: str) -> dict:
+        """Ręczny plik uruchamiający dla gry (Extra/GOG) — używany przy eksporcie."""
+        try:
+            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) \
+                if CONFIG_PATH.exists() else _default_config()
+            store = raw.get("exe_override")
+            if not isinstance(store, dict):
+                store = {}
+            if path:
+                store[key] = path
+            else:
+                store.pop(key, None)
+            raw["exe_override"] = store
+            CONFIG_PATH.write_text(json.dumps(raw, ensure_ascii=False, indent=2),
+                                   encoding="utf-8")
+        except Exception as e:
+            return {"ok": False, "reason": str(e)}
+        return {"ok": True}
+
     def set_thumb_size(self, px) -> dict:
         try:
             px = max(96, min(320, int(px)))
@@ -611,13 +630,19 @@ class Api:
         else:
             query = self._title_override(key, cfg)       # użyj zapisanego dopasowania
         cands = art.candidates_for_game(cfg, g, query=query, mode=mode)
-        if mode != "steam" and not query and g.get("source") != "rom":
+        if mode != "steam" and not query:
             try:
-                from pylinks.services.extra_art import ExtraArtSources
-                extra = ExtraArtSources(cfg).candidates(
-                    g.get("name", ""), str(g.get("appid") or ""), "PC")
                 seen = {c["id"] for c in cands}
-                cands += [c for c in extra if c.get("id") not in seen]
+                if g.get("source") == "rom":
+                    from pylinks.services.extra_art import libretro_candidates
+                    if (cfg.get("extra_sources", {}) or {}).get("libretro", True):
+                        cands += [c for c in libretro_candidates(g.get("system", ""), g.get("name", ""))
+                                  if c.get("id") not in seen]
+                else:
+                    from pylinks.services.extra_art import ExtraArtSources
+                    extra = ExtraArtSources(cfg).candidates(
+                        g.get("name", ""), str(g.get("appid") or ""), "PC")
+                    cands += [c for c in extra if c.get("id") not in seen]
             except Exception:
                 pass
         return {"key": key, "candidates": cands,

@@ -203,7 +203,11 @@ def _launch_for(game: dict, creator: ShortcutCreator) -> dict | None:
             return None
         return {"kind": "url",
                 "url": f"com.epicgames.launcher://apps/{an}?action=launch&silent=true"}
+    override = game.get("exe_override") or ""
     if src == "gog":
+        if override:
+            return {"kind": "lnk", "target": override, "args": "",
+                    "work_dir": str(Path(override).parent)}
         pt = _gog_playtask(game.get("game_dir", "") or "")
         if pt:
             exe, args, wd = pt
@@ -214,7 +218,7 @@ def _launch_for(game: dict, creator: ShortcutCreator) -> dict | None:
                     "work_dir": str(Path(exe).parent)}
         return None
     if src == "extra":
-        exe = game.get("launch_exe") or _find_exe(game.get("game_dir", ""))
+        exe = override or game.get("launch_exe") or _find_exe(game.get("game_dir", ""))
         if not exe:
             return None
         return {"kind": "lnk", "target": exe, "args": "",
@@ -263,10 +267,13 @@ def export_games(cfg: dict, games: list[dict], cache_dir: Path,
         return cfg.get("icon_fit_mode", "pad"), 0.5
 
     from pylinks.api import _game_key       # klucz spójny z resztą (lazy, bez cyklu)
+    exe_over = cfg.get("exe_override", {}) or {}
     done, failed, no_icon = 0, [], 0
     total = len(games)
     for i, g in enumerate(games):
         key = _game_key(g)
+        if exe_over.get(key):
+            g["exe_override"] = exe_over[key]
         name = safe_name(g.get("name", "") or "gra")
         plat = _platform_dir(g)
         out_dir = Path(links_dir) / plat

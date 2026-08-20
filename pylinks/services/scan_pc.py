@@ -344,6 +344,16 @@ def scan_pc_library(cfg: dict, *, resolve_dirs: bool = True) -> dict:
             gd = scanner.resolve_game_dir(g)
             if gd:
                 g["game_dir"] = str(gd)
+    # posiadane, ale NIE zainstalowane (Steam Web API) — dołączamy dla grafik/eksportu
+    if cfg.get("steam_include_owned") and scanner.use_web_api:
+        have = {g.get("appid") for g in steam_games}
+        for o in scanner.fetch_owned_games():
+            aid = str(o.get("appid", ""))
+            if aid and aid not in have:
+                steam_games.append(_mk_game(name=o.get("name", aid), source="steam",
+                                            appid=aid))
+                have.add(aid)
+        steam_games.sort(key=lambda g: (g.get("name") or "").lower())
 
     extra_games: list[dict] = []
     if (cfg.get("extra_dir") or "").strip():

@@ -344,9 +344,13 @@ def export_to_steam(cfg: dict, games: list, cache_dir: Path) -> dict:
     icons_dir = Path(cache_dir) / "icons"
     icons_dir.mkdir(parents=True, exist_ok=True)
 
+    exe_over = cfg.get("exe_override", {}) or {}
     added, art_n, skipped = 0, 0, 0
     tag_appids: dict = {}
     for g in games:
+        _k0 = _game_key(g)
+        if exe_over.get(_k0):
+            g["exe_override"] = exe_over[_k0]
         launch = _exp._launch_for(g, creator)
         if not launch:
             skipped += 1; continue
