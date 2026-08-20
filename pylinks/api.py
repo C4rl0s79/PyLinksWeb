@@ -121,6 +121,25 @@ def _ico_to_data_uri(ico_path: str) -> "str | None":
         return None
 
 
+def _shortcut_icon_path(f) -> str:
+    """Ścieżka .ico wskazana przez skrót (.lnk IconLocation / .url IconFile)."""
+    try:
+        if f.suffix.lower() == ".url":
+            for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if line.lower().startswith("iconfile="):
+                    return line.split("=", 1)[1].strip()
+            return ""
+        import pythoncom, win32com.client  # type: ignore
+        pythoncom.CoInitialize()
+        try:
+            ico = win32com.client.Dispatch("WScript.Shell").CreateShortcut(str(f)).IconLocation or ""
+        finally:
+            pythoncom.CoUninitialize()
+        return ico.split(",")[0].strip().strip('"')
+    except Exception:
+        return ""
+
+
 _ICON_URI_CACHE: dict = {}
 
 
@@ -403,6 +422,54 @@ class Api:
         _ICON_URI_CACHE.clear()          # świeże ikony w widoku LINKS po eksporcie
         res["links_dir"] = str(LINKS_DIR)
         return res
+
+    def find_orphans(self) -> dict:
+        """Skróty w LINKS/<platforma>/ bez odpowiadającej (zeskanowanej) gry.
+
+        Sprawdza tylko platformy, dla których mamy dane skanu (PC / systemy ROM),
+        żeby brak skanu nie oznaczył wszystkiego jako osierocone."""
+        from pylinks.core.naming import safe_name
+        expected = {}   # platforma → zbiór safe_name istniejących gier
+        if self._pc_games:
+            expected["PC"] = {safe_name(g.get("name", "")) for g in self._pc_games}
+        for g in self._rom_games:
+            expected.setdefault(g.get("system", ""), set()).add(safe_name(g.get("name", "")))
+        orphans = []
+        if not LINKS_DIR.is_dir():
+            return {"orphans": []}
+        for d in sorted(LINKS_DIR.iterdir()):
+            if not d.is_dir() or d.name.lower() in ("kolekcje", "_collections"):
+                continue
+            names = expected.get(d.name)
+            if names is None:
+                continue                     # tej platformy nie skanowaliśmy — pomiń
+            for f in sorted(d.iterdir()):
+                if f.suffix.lower() in (".lnk", ".url") and f.stem not in names:
+                    orphans.append({"name": f.stem, "platform": d.name, "path": str(f)})
+        return {"orphans": orphans}
+
+    def delete_orphans(self, paths: list) -> dict:
+        """Usuwa wskazane skróty + ich ikony .ico (z IconLocation)."""
+        deleted, icons = 0, 0
+        for p in paths or []:
+            f = Path(p)
+            try:
+                if f.suffix.lower() not in (".lnk", ".url") or not f.is_file():
+                    continue
+                if f.parent.parent.resolve() != LINKS_DIR.resolve():
+                    continue                 # bezpieczeństwo: tylko w LINKS/*/
+                ico = _shortcut_icon_path(f)
+                f.unlink()
+                deleted += 1
+                if ico and Path(ico).is_file() and "cache" in str(ico).lower():
+                    try:
+                        Path(ico).unlink(); icons += 1
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        _ICON_URI_CACHE.clear()
+        return {"ok": True, "deleted": deleted, "icons": icons}
 
     def missing_keys(self, kind: str = "pc", filt: str = "") -> list:
         """Klucze gier BEZ istniejącego skrótu w LINKS/<platforma>/."""

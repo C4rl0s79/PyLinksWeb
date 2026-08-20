@@ -126,7 +126,24 @@ async function runScan(){
   }catch(e){
     el("grid").innerHTML = `<div class="welcome muted">Błąd skanu: ${e.message}</div>`;
   }
-  scanRomsUI();   // skan ROM-ów w tle
+  await scanRomsUI();   // skan ROM-ów
+  checkOrphans();       // monit o osieroconych skrótach
+}
+
+// osierocone skróty (gra już nie istnieje) → propozycja usunięcia
+async function checkOrphans(){
+  try{
+    const r = await api("find_orphans");
+    const o = (r && r.orphans) || [];
+    if (!o.length) return;
+    const list = o.slice(0, 15).map(x => `  [${x.platform}] ${x.name}`).join("\n");
+    const more = o.length > 15 ? `\n  …i ${o.length - 15} więcej` : "";
+    if (confirm(`Znaleziono ${o.length} osieroconych skrótów (gra już nie istnieje):\n${list}${more}\n\nUsunąć je wraz z ikonami?`)){
+      const rr = await api("delete_orphans", o.map(x => x.path));
+      alert(`Usunięto ${rr.deleted} skrótów i ${rr.icons} ikon.`);
+      loadPlatforms();
+    }
+  }catch(e){}
 }
 
 // ── ROM-y ────────────────────────────────────────────────────────────────
