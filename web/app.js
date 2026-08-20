@@ -219,7 +219,7 @@ function card(name, sub, src, game){
   if (hasKey){
     c.dataset.key = game.key;
     if (SELECTED.has(game.key)) c.classList.add("sel");
-    c.onclick = (e) => { if (!e.target.closest(".pick")) toggleSel(game.key, c); };
+    c.onclick = (e) => { if (!e.target.closest(".pick")) openPicker(game); };  // lewy klik = wybór ikony
     c.oncontextmenu = (e) => { e.preventDefault(); showCtx(e.clientX, e.clientY, game); };
   }
   c.title = (game && game.game_dir) ? game.game_dir : name;
