@@ -161,9 +161,15 @@ def add_platform_spine(img, system: str, side: str = "left",
         spine.alpha_composite(lg, ((sw - lg.width) // 2, (S - lg.height) // 2))
 
         out = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-        if True:
-            # grafika W CAŁOŚCI (contain) w obszarze (S-sw) × S — proporcjonalnie
-            aw = S - sw
+        aw = S - sw
+        area_aspect = aw / S
+        src_aspect = W / H
+        if abs(src_aspect - area_aspect) / area_aspect <= 0.20:
+            # bliskie proporcje (plakat) → lekko poszerz do WYPEŁNIENIA obszaru
+            art = base.resize((aw, S), Image.LANCZOS)
+            out.alpha_composite(art, (sw if side == "left" else 0, 0))
+        else:
+            # duża różnica (np. kwadrat) → contain, bez zniekształcenia/ucięcia
             sc = min(aw / W, S / H)
             nw, nh = max(1, round(W * sc)), max(1, round(H * sc))
             art = base.resize((nw, nh), Image.LANCZOS)

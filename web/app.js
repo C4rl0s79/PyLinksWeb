@@ -280,9 +280,16 @@ function setCover(key, dataUri, fit, offset){
   img.className = "cover";
   img.alt = ""; styleCover(img, fit, offset); img.src = dataUri;
   c.insertBefore(img, ph);
-  // karta z grzbietem: plakat W CAŁOŚCI (contain), bez ucinania góry/dołu
+  // karta z grzbietem: lekko poszerz do wypełnienia (fill) gdy proporcje bliskie
+  // obszarowi (100%-22%); przy dużej różnicy (kwadrat) contain — bez ucinania.
   if (c.classList.contains("spine-left") || c.classList.contains("spine-right")){
-    img.style.objectFit = "contain"; img.style.objectPosition = "center";
+    const decide = () => {
+      const a = img.naturalWidth / img.naturalHeight;
+      const area = 0.78;   // (100% − grzbiet 22%)
+      img.style.objectFit = (Math.abs(a - area) / area <= 0.20) ? "fill" : "contain";
+      img.style.objectPosition = "center";
+    };
+    if (img.complete && img.naturalWidth) decide(); else img.addEventListener("load", decide, {once:true});
   }
 }
 
