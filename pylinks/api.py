@@ -22,13 +22,56 @@ from pylinks.services import scan_pc, art
 
 
 def _load_config() -> dict:
+    """Config do UŻYTKU wewnętrznego — sekrety odszyfrowane (DPAPI)."""
+    cfg = None
     try:
         if CONFIG_PATH.exists():
-            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-            return migrate_config(raw)
+            cfg = migrate_config(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
     except Exception:
-        pass
-    return _default_config()
+        cfg = None
+    if cfg is None:
+        cfg = _default_config()
+    _decrypt_secrets(cfg)
+    return cfg
+
+
+# sekrety szyfrowane DPAPI (ścieżki w configu)
+SECRET_PATHS = [
+    ("api_keys", "sgdb_key"),
+    ("api_keys", "steam_api_key"),
+    ("extra_sources", "igdb_client_secret"),
+    ("extra_sources", "tgdb_key"),
+]
+
+
+def _get_path(d: dict, path):
+    for k in path:
+        if not isinstance(d, dict):
+            return None
+        d = d.get(k)
+    return d
+
+
+def _set_path(d: dict, path, val) -> None:
+    for k in path[:-1]:
+        d = d.setdefault(k, {})
+    d[path[-1]] = val
+
+
+def _has_path(d: dict, path) -> bool:
+    for k in path[:-1]:
+        if not isinstance(d, dict) or k not in d:
+            return False
+        d = d[k]
+    return isinstance(d, dict) and path[-1] in d
+
+
+def _decrypt_secrets(cfg: dict) -> None:
+    from pylinks.core import secure
+    for p in SECRET_PATHS:
+        v = _get_path(cfg, p)
+        if v:
+            _set_path(cfg, p, secure.unprotect(v))
 
 
 def _deep_merge(dst: dict, patch: dict) -> None:
@@ -608,28 +651,92 @@ class Api:
 
     # --- config ---
     def get_config(self) -> dict:
-        return _load_config()
+        """Config dla UI — sekrety ZAMASKOWANE (nie ujawniamy kluczy).
+        `_secrets_set`: które sekrety są zapisane (do placeholderów)."""
+        cfg = _load_config()
+        sset = {}
+        for p in SECRET_PATHS:
+            sset[p[-1]] = bool(_get_path(cfg, p))
+            _set_path(cfg, p, "")            # maska — puste pole w UI
+        cfg["_secrets_set"] = sset
+        return cfg
 
     def save_config(self, patch: dict) -> dict:
-        """Zapisuje zmiany (deep-merge) do config.json. Zwraca zaktualizowany config."""
+        """Zapis (deep-merge) do config.json. Sekrety szyfrowane DPAPI; puste
+        pole sekretu = zachowaj istniejący (nie nadpisuj)."""
+        from pylinks.core import secure
+        patch = dict(patch or {})
         try:
             raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) \
                 if CONFIG_PATH.exists() else _default_config()
         except Exception:
             raw = _default_config()
-        _deep_merge(raw, patch or {})
+        # istniejące sekrety → plaintext (żeby scalanie/ponowne szyfrowanie było spójne)
+        for p in SECRET_PATHS:
+            v = _get_path(raw, p)
+            if v:
+                _set_path(raw, p, secure.unprotect(v))
+        # puste pole sekretu w patchu = NIE zmieniaj (usuń z patcha)
+        import copy
+        patch = copy.deepcopy(patch)
+        for p in SECRET_PATHS:
+            if _has_path(patch, p) and not (_get_path(patch, p) or "").strip():
+                _set_path(patch, p, _get_path(raw, p) or "")
+        _deep_merge(raw, patch)
+        # zaszyfruj sekrety przed zapisem
+        for p in SECRET_PATHS:
+            v = _get_path(raw, p)
+            if v:
+                _set_path(raw, p, secure.protect(v))
         try:
             CONFIG_PATH.write_text(
                 json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as e:
             return {"ok": False, "reason": str(e)}
-        self._baked.clear()          # ścieżki/klucze mogły się zmienić
-        return {"ok": True, "config": migrate_config(raw)}
+        self._baked.clear()
+        return {"ok": True, "secured": secure.available()}
 
     def detect_steam(self) -> dict:
         """Auto-wykrycie Steam.exe z rejestru."""
         from pylinks.services.scan_pc import detect_steam_exe
         return {"steam_exe": detect_steam_exe() or ""}
+
+    def pick_folder(self, start: str = "") -> dict:
+        """Natywny dialog wyboru folderu."""
+        try:
+            import webview
+            w = webview.windows[0] if webview.windows else None
+            if not w:
+                return {"path": ""}
+            res = w.create_file_dialog(webview.FOLDER_DIALOG,
+                                       directory=start or "")
+            return {"path": (res[0] if res else "")}
+        except Exception:
+            return {"path": ""}
+
+    def pick_file(self, start: str = "") -> dict:
+        """Natywny dialog wyboru pliku (np. .exe emulatora / Steam.exe)."""
+        try:
+            import webview
+            w = webview.windows[0] if webview.windows else None
+            if not w:
+                return {"path": ""}
+            res = w.create_file_dialog(
+                webview.OPEN_DIALOG, directory=start or "",
+                file_types=("Programy (*.exe)", "Wszystkie pliki (*.*)"))
+            return {"path": (res[0] if res else "")}
+        except Exception:
+            return {"path": ""}
+
+    def rom_autodetect(self, base_rom: str, base_emu: str) -> dict:
+        """Auto-wykrywanie systemów ROM (podfoldery → preset + emulator)."""
+        from pylinks.services import emulators as _emu
+        return {"systems": _emu.autodetect_systems(base_rom, base_emu)}
+
+    def scan_emulators(self, plat: str, base_emu: str) -> list:
+        """Opcje emulatora dla platformy (rdzenie RetroArch + standalone)."""
+        from pylinks.services import emulators as _emu
+        return _emu.scan_emulators_for(plat, base_emu)
 
     def test_sgdb(self) -> dict:
         """Sprawdza klucz SGDB (tanie zapytanie)."""

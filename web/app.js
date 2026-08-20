@@ -763,6 +763,12 @@ async function openSettings(){
   el("s_baserom").value = rs.base_rom_dir || "";
   el("s_baseemu").value = rs.base_emu_dir || "";
   romTblRender(rs.systems || []);
+  // sekrety zamaskowane — placeholder informuje, że są zapisane
+  const sset = cfg._secrets_set || {};
+  const ph = (id, set) => { el(id).value = ""; el(id).placeholder = set ? "●●●●●● zapisany — wpisz, by zmienić" : "(brak)"; };
+  ph("s_sgdb", sset.sgdb_key); ph("s_steamkey", sset.steam_api_key);
+  ph("s_igdbsec", sset.igdb_client_secret); ph("s_tgdbkey", sset.tgdb_key);
+  el("s_secnote").textContent = "🔒 szyfrowane lokalnie (Windows DPAPI)";
   el("setMsg").textContent = "";
   el("setModal").hidden = false;
 }
@@ -770,13 +776,52 @@ function closeSettings(){ el("setModal").hidden = true; }
 
 function romRow(s){
   const tr = document.createElement("tr");
-  const cell = (val, cls="") => `<td class="${cls}"><input type="text" value="${(val||'').replace(/"/g,'&quot;')}"></td>`;
+  const esc = (v) => (v||'').replace(/"/g,'&quot;');
+  const cell = (val, cls="") => `<td class="${cls}"><input type="text" value="${esc(val)}"></td>`;
   tr.innerHTML =
-    cell(s.name) + cell(s.rom_dir) + cell(s.emulator) + cell(s.primary_ext) + cell(s.launch_args) +
+    cell(s.name) + cell(s.rom_dir) +
+    `<td class="emu"><input type="text" value="${esc(s.emulator)}">` +
+      `<button class="btn ghost mini emu-pick" title="Wybierz emulator/rdzeń">⚙</button>` +
+      `<button class="btn ghost mini emu-file" title="Wskaż .exe">📁</button></td>` +
+    cell(s.primary_ext) + cell(s.launch_args) +
     `<td class="sub"><input type="checkbox" ${s.roms_in_subdirs?'checked':''}></td>` +
     `<td><button class="del" title="Usuń">✕</button></td>`;
   tr.querySelector(".del").onclick = () => tr.remove();
+  tr.querySelector(".emu-pick").onclick = (e) => emuPickOpen(e.currentTarget, tr);
+  tr.querySelector(".emu-file").onclick = async () => {
+    const r = await api("pick_file", sv("s_baseemu")); if (r.path) romRowEmu(tr, r.path, null);
+  };
   return tr;
+}
+
+function romRowInputs(tr){ return tr.querySelectorAll("input[type=text]"); }
+function romRowEmu(tr, exe, args){
+  const inp = romRowInputs(tr);
+  inp[2].value = exe;                 // emulator (kol. 3)
+  if (args != null) inp[4].value = args;   // args (kol. 5)
+}
+
+// popup wyboru emulatora/rdzenia dla wiersza
+async function emuPickOpen(btn, tr){
+  const sys = romRowInputs(tr)[0].value.trim();
+  const base = sv("s_baseemu");
+  const pop = el("emuPop");
+  pop.innerHTML = `<div class="muted" style="padding:6px 10px">Szukam…</div>`;
+  const r = btn.getBoundingClientRect();
+  pop.style.left = Math.min(r.left, innerWidth-240) + "px";
+  pop.style.top = Math.min(r.bottom+4, innerHeight-290) + "px";
+  pop.hidden = false;
+  let opts = [];
+  try{ opts = await api("scan_emulators", sys, base); }catch(e){}
+  if (!opts.length){ pop.innerHTML = `<div class="muted" style="padding:6px 10px">Brak w folderze emulatorów.</div>`; return; }
+  pop.innerHTML = "";
+  for (const o of opts){
+    const b = document.createElement("button");
+    if (o.type === "retroarch") b.className = "ra";
+    b.textContent = o.label;
+    b.onclick = () => { romRowEmu(tr, o.exe, o.args); pop.hidden = true; };
+    pop.appendChild(b);
+  }
 }
 function romTblRender(systems){
   const b = el("romTblBody"); b.innerHTML = "";
@@ -812,6 +857,27 @@ el("s_testsgdb").onclick = async () => {
   catch(e){ el("s_sgdbres").textContent = "✗ błąd"; }
 };
 el("s_romadd").onclick = () => el("romTblBody").appendChild(romRow({primary_ext:"m3u,cue,iso,chd,bin"}));
+// przyciski wyboru folderu / pliku (📁)
+el("setBody").addEventListener("click", async (e) => {
+  const fb = e.target.closest("[data-folder]"), fl = e.target.closest("[data-file]");
+  if (fb){ e.preventDefault(); const r = await api("pick_folder", el(fb.dataset.folder).value);
+           if (r.path) el(fb.dataset.folder).value = r.path; }
+  else if (fl){ e.preventDefault(); const r = await api("pick_file", el(fl.dataset.file).value);
+                if (r.path) el(fl.dataset.file).value = r.path; }
+});
+el("s_romauto").onclick = async () => {
+  const br = sv("s_baserom"), be = sv("s_baseemu");
+  if (!br){ el("s_romautores").textContent = "Podaj wspólny folder ROM"; return; }
+  el("s_romautores").textContent = "Skanuję…";
+  try{
+    const r = await api("rom_autodetect", br, be);
+    romTblRender(r.systems || []);
+    el("s_romautores").textContent = `Wykryto ${(r.systems||[]).length} systemów`;
+  }catch(e){ el("s_romautores").textContent = "Błąd: " + e.message; }
+};
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#emuPop") && !e.target.closest(".emu-pick")) el("emuPop").hidden = true;
+});
 el("setSave").onclick = async () => {
   const patch = {
     api_keys: {sgdb_key: sv("s_sgdb"), steam_api_key: sv("s_steamkey"), steam_id64: sv("s_steamid")},

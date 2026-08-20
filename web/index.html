@@ -75,6 +75,8 @@
   </footer>
 
   <!-- Menu kontekstowe (prawy klik na karcie) -->
+  <div id="emuPop" class="emu-pop" hidden></div>
+
   <div id="ctxMenu" class="ctx" hidden>
     <button class="ctx-item" data-act="pick">🖼 Wybierz ikonę…</button>
     <button class="ctx-item" data-act="crop">✂ Kadruj (przeciągnij)</button>
@@ -91,19 +93,19 @@
       </div>
       <div class="set-body" id="setBody">
         <section class="set-sec">
-          <h3>Klucze API</h3>
-          <label>SteamGridDB API Key <input id="s_sgdb" type="text" spellcheck="false"></label>
-          <label>Steam Web API Key <input id="s_steamkey" type="text" spellcheck="false"></label>
+          <h3>Klucze API <span class="muted" id="s_secnote" style="font-size:11px"></span></h3>
+          <label>SteamGridDB API Key <input id="s_sgdb" type="password" autocomplete="off" spellcheck="false"></label>
+          <label>Steam Web API Key <input id="s_steamkey" type="password" autocomplete="off" spellcheck="false"></label>
           <label>SteamID64 <input id="s_steamid" type="text" spellcheck="false"></label>
           <label class="chk"><input id="s_usewebapi" type="checkbox"> Używaj Steam Web API</label>
-          <button class="btn ghost" id="s_testsgdb">Testuj SGDB</button>
-          <span id="s_sgdbres" class="muted"></span>
+          <div class="inln"><button class="btn ghost" id="s_testsgdb">Testuj SGDB</button>
+            <span id="s_sgdbres" class="muted"></span></div>
         </section>
 
         <section class="set-sec">
           <h3>Skan PC</h3>
-          <label>Steam.exe <span class="inln"><input id="s_steamexe" type="text" spellcheck="false"><button class="btn ghost" id="s_detect">Wykryj</button></span></label>
-          <label>Folder „Extra" <input id="s_extradir" type="text" spellcheck="false"></label>
+          <label>Steam.exe <span class="inln"><input id="s_steamexe" type="text" spellcheck="false"><button class="btn ghost mini" data-file="s_steamexe">📁</button><button class="btn ghost" id="s_detect">Wykryj</button></span></label>
+          <label>Folder „Extra" <span class="inln"><input id="s_extradir" type="text" spellcheck="false"><button class="btn ghost mini" data-folder="s_extradir">📁</button></span></label>
           <label class="chk"><input id="s_epic" type="checkbox"> Skanuj Epic</label>
           <label class="chk"><input id="s_gog" type="checkbox"> Skanuj GOG</label>
         </section>
@@ -122,18 +124,20 @@
           <label class="chk"><input id="s_steamcdn" type="checkbox"> Steam CDN (bez klucza)</label>
           <label class="chk"><input id="s_igdb" type="checkbox"> IGDB</label>
           <label>IGDB Client ID <input id="s_igdbid" type="text" spellcheck="false"></label>
-          <label>IGDB Client Secret <input id="s_igdbsec" type="text" spellcheck="false"></label>
+          <label>IGDB Client Secret <input id="s_igdbsec" type="password" autocomplete="off" spellcheck="false"></label>
           <label class="chk"><input id="s_tgdb" type="checkbox"> TheGamesDB</label>
-          <label>TGDB API Key <input id="s_tgdbkey" type="text" spellcheck="false"></label>
+          <label>TGDB API Key <input id="s_tgdbkey" type="password" autocomplete="off" spellcheck="false"></label>
         </section>
 
         <section class="set-sec">
           <h3>ROM-y</h3>
           <label class="chk"><input id="s_romen" type="checkbox"> Włącz obsługę ROM-ów</label>
-          <label>Wspólny folder ROM <input id="s_baserom" type="text" spellcheck="false"></label>
-          <label>Wspólny folder emulatorów <input id="s_baseemu" type="text" spellcheck="false"></label>
+          <label>Wspólny folder ROM <span class="inln"><input id="s_baserom" type="text" spellcheck="false"><button class="btn ghost mini" data-folder="s_baserom">📁</button></span></label>
+          <label>Wspólny folder emulatorów <span class="inln"><input id="s_baseemu" type="text" spellcheck="false"><button class="btn ghost mini" data-folder="s_baseemu">📁</button></span></label>
+          <div class="inln"><button class="btn" id="s_romauto">⚙ Auto-wykryj systemy</button>
+            <span id="s_romautores" class="muted"></span></div>
           <div class="rom-tbl-wrap"><table class="rom-tbl" id="romTbl">
-            <thead><tr><th>System</th><th>Folder ROM</th><th>Emulator</th><th>Rozszerzenia</th><th>Args</th><th>Sub</th><th></th></tr></thead>
+            <thead><tr><th>System</th><th>Folder ROM</th><th>Emulator / rdzeń</th><th>Ext</th><th>Args</th><th>Sub</th><th></th></tr></thead>
             <tbody id="romTblBody"></tbody>
           </table></div>
           <button class="btn ghost" id="s_romadd">+ Dodaj system</button>
