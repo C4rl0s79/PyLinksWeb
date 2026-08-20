@@ -71,14 +71,47 @@ RETROARCH_CORE_SYSTEMS: dict = {
 }
 
 
+def _norm(s: str) -> str:
+    return re.sub(r"[\s_.\-]+", "", str(s or "")).lower()
+
+
 def _match_preset(folder_name: str):
-    fl = re.sub(r"[\s_-]+", "", str(folder_name or "")).lower()
+    """Dopasowanie nazwy podfolderu ROM do presetu — odporne na warianty nazw.
+
+    1) dokładne (po normalizacji) == name/display/dir_names,
+    2) PODŁAŃCUCH: dir_name (≥4 znaki) zawarty w nazwie folderu — dłuższy wygrywa
+       ('sega - Megadrive'→'megadrive', 'Sega Genesis'→'genesis', 'Sony PS1'→'ps1'),
+    3) alias kanoniczny (PSX→PS1, MEGADRIVE/GENESIS→MD…).
+    """
+    fl = _norm(folder_name)
     if not fl:
         return None
+    tokens = {_norm(t) for t in re.split(r"[\s_.\-]+", str(folder_name)) if _norm(t)}
+    # 1) dokładne
     for p in ROM_SYSTEM_PRESETS:
         for dn in [p.get("name", ""), p.get("display", "")] + p.get("dir_names", []):
-            if dn and re.sub(r"[\s_-]+", "", dn).lower() == fl:
+            if dn and _norm(dn) == fl:
                 return p
+    # 2) token folderu == dir_name ('psx games'→psx, 'Sony PSP'→psp)
+    for p in ROM_SYSTEM_PRESETS:
+        for dn in [p.get("name", ""), p.get("display", "")] + p.get("dir_names", []):
+            nd = _norm(dn)
+            if nd and nd in tokens:
+                return p
+    # 3) podłańcuch w obie strony (≥4 znaki, najdłuższy token wygrywa)
+    best, best_len = None, 0
+    for p in ROM_SYSTEM_PRESETS:
+        for dn in [p.get("name", ""), p.get("display", "")] + p.get("dir_names", []):
+            nd = _norm(dn)
+            if len(nd) >= 4 and (nd in fl or fl in nd) and len(nd) > best_len:
+                best, best_len = p, len(nd)
+    if best:
+        return best
+    # 3) alias kanoniczny (usuwa vendor/separatory + mapuje PSX→PS1 itd.)
+    canon = spine_canon_key(folder_name).upper()
+    for p in ROM_SYSTEM_PRESETS:
+        if p.get("name", "").upper() == canon:
+            return p
     return None
 
 
