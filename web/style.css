@@ -1,6 +1,6 @@
 :root{
   --bg:#1e1e2e; --bg2:#181825; --bg3:#313244;
-  --fg:#cdd6f4; --fg2:#6c7086;
+  --fg:#cdd6f4; --fg2:#c3cadf;   /* rozjaśnione — ciemnoszary był nieczytelny */
   --acc:#89b4fa; --grn:#a6e3a1; --red:#f38ba8;
   --yel:#f9e2af; --ext:#cba6f7; --orn:#fab387;
   --radius:10px;
