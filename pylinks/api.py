@@ -39,6 +39,8 @@ def _load_config() -> dict:
 SECRET_PATHS = [
     ("api_keys", "sgdb_key"),
     ("api_keys", "steam_api_key"),
+    ("api_keys", "steam_id64"),
+    ("extra_sources", "igdb_client_id"),
     ("extra_sources", "igdb_client_secret"),
     ("extra_sources", "tgdb_key"),
 ]
@@ -888,6 +890,27 @@ class Api:
         """Opcje emulatora dla platformy (rdzenie RetroArch + standalone)."""
         from pylinks.services import emulators as _emu
         return _emu.scan_emulators_for(plat, base_emu)
+
+    def security_status(self) -> dict:
+        """Stan zabezpieczeń: DPAPI + TPM (obecny/włączony/gotowy)."""
+        from pylinks.core import secure
+        out = {"backend": secure.backend(), "dpapi": secure.available(),
+               "tpm_present": None, "tpm_enabled": None, "tpm_ready": None}
+        try:
+            import subprocess
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-Tpm | ConvertTo-Json -Compress"],
+                capture_output=True, text=True, timeout=8, startupinfo=si)
+            d = json.loads(r.stdout or "{}")
+            out["tpm_present"] = bool(d.get("TpmPresent"))
+            out["tpm_enabled"] = bool(d.get("TpmEnabled"))
+            out["tpm_ready"] = bool(d.get("TpmReady"))
+        except Exception:
+            pass
+        return out
 
     def test_sgdb(self) -> dict:
         """Sprawdza klucz SGDB (tanie zapytanie)."""

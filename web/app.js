@@ -772,9 +772,6 @@ async function openSettings(){
   let cfg;
   try{ cfg = await api("get_config"); }catch(e){ alert("Brak mostu."); return; }
   const ak = cfg.api_keys || {}, es = cfg.extra_sources || {}, rs = cfg.rom_support || {};
-  el("s_sgdb").value = ak.sgdb_key || "";
-  el("s_steamkey").value = ak.steam_api_key || "";
-  el("s_steamid").value = ak.steam_id64 || "";
   el("s_usewebapi").checked = !!cfg.use_steam_web_api;
   el("s_steamexe").value = cfg.steam_exe || "";
   el("s_extradir").value = cfg.extra_dir || "";
@@ -785,10 +782,7 @@ async function openSettings(){
   el("s_logodir").value = cfg.platform_logo_dir || "";
   el("s_steamcdn").checked = es.steam_cdn !== false;
   el("s_igdb").checked = !!es.igdb;
-  el("s_igdbid").value = es.igdb_client_id || "";
-  el("s_igdbsec").value = es.igdb_client_secret || "";
   el("s_tgdb").checked = !!es.tgdb;
-  el("s_tgdbkey").value = es.tgdb_key || "";
   el("s_romen").checked = !!rs.enabled;
   el("s_baserom").value = rs.base_rom_dir || "";
   el("s_baseemu").value = rs.base_emu_dir || "";
@@ -797,8 +791,15 @@ async function openSettings(){
   const sset = cfg._secrets_set || {};
   const ph = (id, set) => { el(id).value = ""; el(id).placeholder = set ? "●●●●●● zapisany — wpisz, by zmienić" : "(brak)"; };
   ph("s_sgdb", sset.sgdb_key); ph("s_steamkey", sset.steam_api_key);
+  ph("s_steamid", sset.steam_id64); ph("s_igdbid", sset.igdb_client_id);
   ph("s_igdbsec", sset.igdb_client_secret); ph("s_tgdbkey", sset.tgdb_key);
-  el("s_secnote").textContent = "🔒 szyfrowane lokalnie (Windows DPAPI)";
+  el("s_secnote").textContent = "🔒 szyfrowane lokalnie";
+  api("security_status").then(s => {
+    const b = s.backend === "tpm" ? "TPM (sprzętowy)" : (s.backend === "dpapi" ? "Windows DPAPI" : "brak");
+    let t = "";
+    if (s.tpm_present != null) t = ` • TPM: ${s.tpm_present ? (s.tpm_ready ? "gotowy" : "obecny") : "brak"}`;
+    el("s_secnote").textContent = `🔒 szyfrowane: ${b}${t}`;
+  }).catch(()=>{});
   el("setMsg").textContent = "";
   el("setModal").hidden = false;
 }
