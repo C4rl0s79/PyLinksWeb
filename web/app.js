@@ -354,7 +354,7 @@ el("ctxMenu").addEventListener("click", (e) => {
   hideCtx();
   if (!g) return;
   if (act === "pick") openPicker(g);
-  else if (act === "crop") startCropDrag(g);
+  else if (act === "crop") openCropWindow(g);             // okno z przeciąganiem
   else if (act === "frame") setCropMode(g, "pad", 0.5);   // Ramki
   else if (act === "default") cropDefault(g);             // Domyślne
 });
@@ -373,47 +373,76 @@ async function cropDefault(game){
   }catch(e){}
 }
 
-// ── Kadruj = przeciąganie myszką BEZPOŚREDNIO na obrazku (bez suwaka) ────────
-let CROP_DRAG = null;
-function startCropDrag(game){
-  const thumb = document.querySelector(`.card[data-key="${cssEsc(game.key)}"] .thumb`);
-  const img = thumb && thumb.querySelector("img.cover");
-  if (!img){ return; }
-  img.style.objectFit = "cover";                       // tryb kadru
-  const portrait = img.naturalHeight >= img.naturalWidth;
-  CROP_DRAG = {key: game.key, thumb, img, portrait, offset: 0.5};
-  thumb.classList.add("cropping");
-  thumb.style.cursor = portrait ? "ns-resize" : "ew-resize";
-
-  const move = (e) => {
-    const r = thumb.getBoundingClientRect();
-    let off = CROP_DRAG.portrait ? (e.clientY - r.top) / r.height
-                                 : (e.clientX - r.left) / r.width;
-    off = Math.max(0, Math.min(1, off));
-    CROP_DRAG.offset = off;
-    const p = Math.round(off * 100);
-    img.style.objectPosition = p + "% " + p + "%";
-  };
-  const finish = async (commit) => {
-    thumb.removeEventListener("mousemove", move);
-    thumb.removeEventListener("click", onClick);
-    document.removeEventListener("keydown", onKey);
-    thumb.classList.remove("cropping");
-    thumb.style.cursor = "";
-    if (commit && CROP_DRAG){
-      try{
-        const r = await api("crop_apply", CROP_DRAG.key, "crop", CROP_DRAG.offset, MODE);
-        restyleCover(CROP_DRAG.key, r.fit, r.offset);
-      }catch(e){}
-    }
-    CROP_DRAG = null;
-  };
-  const onClick = (e) => { e.stopPropagation(); finish(true); };   // klik = zatwierdź
-  const onKey = (e) => { if (e.key === "Escape") finish(false); }; // Esc = anuluj
-  thumb.addEventListener("mousemove", move);
-  thumb.addEventListener("click", onClick);
-  document.addEventListener("keydown", onKey);
+// ── Kadruj w OSOBNYM oknie: chwyć grafikę i przeciągnij (grab-drag) ─────────
+let CROP_W = null;
+function openCropWindow(game){
+  el("cropTitle").textContent = "Kadrowanie: " + game.name;
+  el("cropModal").hidden = false;
+  const img = el("cropImg");
+  CROP_W = {key: game.key, offset: 0.5, portrait: true};
+  api("crop_get", game.key, MODE).then(r => {
+    CROP_W.offset = (r.offset != null ? +r.offset : 0.5);
+    img.onload = () => {
+      CROP_W.portrait = img.naturalHeight >= img.naturalWidth;
+      applyCropPos();
+    };
+    img.src = r.raw || "";
+    if (!r.raw){ el("cropImg").removeAttribute("src"); }
+  }).catch(()=>{});
 }
+function closeCropWindow(){ el("cropModal").hidden = true; CROP_W = null; }
+function applyCropPos(){
+  const p = Math.round(Math.max(0, Math.min(1, CROP_W.offset)) * 100);
+  el("cropImg").style.objectPosition = p + "% " + p + "%";
+}
+
+(function initCropDrag(){
+  const frame = () => el("cropFrame");
+  let dragging = false, startPos = 0, startOff = 0;
+  const down = (e) => {
+    if (!CROP_W) return;
+    dragging = true; startOff = CROP_W.offset;
+    startPos = CROP_W.portrait ? e.clientY : e.clientX;
+    frame().classList.add("drag");
+    e.preventDefault();
+  };
+  const move = (e) => {
+    if (!dragging || !CROP_W) return;
+    const rect = frame().getBoundingClientRect();
+    const size = CROP_W.portrait ? rect.height : rect.width;
+    const cur = CROP_W.portrait ? e.clientY : e.clientX;
+    // GRAB: przeciągasz w dół → grafika w dół → widać górę → offset maleje
+    CROP_W.offset = Math.max(0, Math.min(1, startOff - (cur - startPos) / size));
+    applyCropPos();
+  };
+  const up = () => { dragging = false; const f = el("cropFrame"); if (f) f.classList.remove("drag"); };
+  document.addEventListener("mousedown", (e) => { if (e.target.closest("#cropFrame")) down(e); });
+  document.addEventListener("mousemove", move);
+  document.addEventListener("mouseup", up);
+})();
+
+el("cropClose").onclick = closeCropWindow;
+el("cropModal").addEventListener("click", (e) => { if (e.target === el("cropModal")) closeCropWindow(); });
+el("cropSave").onclick = async () => {
+  if (!CROP_W) return;
+  try{
+    const r = await api("crop_apply", CROP_W.key, "crop", CROP_W.offset, MODE);
+    restyleCover(CROP_W.key, r.fit, r.offset);
+  }catch(e){}
+  closeCropWindow();
+};
+el("cropFrameBtn").onclick = async () => {
+  if (!CROP_W) return;
+  try{ const r = await api("crop_apply", CROP_W.key, "pad", 0.5, MODE);
+       restyleCover(CROP_W.key, r.fit, r.offset); }catch(e){}
+  closeCropWindow();
+};
+el("cropDefBtn").onclick = async () => {
+  if (!CROP_W) return;
+  try{ const r = await api("crop_reset", CROP_W.key, MODE);
+       restyleCover(CROP_W.key, r.fit, r.offset); }catch(e){}
+  closeCropWindow();
+};
 
 document.addEventListener("click", () => hideCtx());
 document.addEventListener("scroll", () => hideCtx(), true);
