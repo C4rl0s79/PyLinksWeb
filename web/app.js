@@ -873,6 +873,93 @@ function romTblCollect(){
   return out;
 }
 
+// ── Kolekcje serii ──────────────────────────────────────────────────────────
+let COLL = {}, COLL_GAMES = [], COLL_CUR = null;
+async function openColl(){
+  try{ const r = await api("collections_data"); COLL = r.collections || {}; COLL_GAMES = r.games || []; }
+  catch(e){ alert("Brak mostu."); return; }
+  COLL_CUR = Object.keys(COLL)[0] || null;
+  renderCollList(); selectColl(COLL_CUR);
+  el("collMsg").textContent = "";
+  el("collModal").hidden = false;
+}
+function closeColl(){ el("collModal").hidden = true; }
+function saveColl(){ try{ api("save_collections", COLL); }catch(e){} }
+
+function renderCollList(){
+  const box = el("collList"); box.innerHTML = "";
+  for (const name of Object.keys(COLL)){
+    const b = document.createElement("button");
+    if (name === COLL_CUR) b.classList.add("active");
+    b.innerHTML = `<span>${name}</span><span class="n">${(COLL[name]||[]).length}</span>`;
+    b.onclick = () => { COLL_CUR = name; renderCollList(); selectColl(name); };
+    box.appendChild(b);
+  }
+  if (!Object.keys(COLL).length) box.innerHTML = `<div class="muted pad">brak kolekcji</div>`;
+}
+function selectColl(name){
+  el("collTitle").textContent = name ? "Kolekcja: " + name : "Wybierz kolekcję po lewej";
+  renderMembers(); renderPool();
+}
+function renderMembers(){
+  const box = el("collMembers"); box.innerHTML = "";
+  const mem = (COLL_CUR && COLL[COLL_CUR]) || [];
+  el("collMemCount").textContent = COLL_CUR ? `(${mem.length})` : "";
+  if (!COLL_CUR){ return; }
+  for (const m of mem){
+    const it = document.createElement("div");
+    it.className = "coll-item";
+    it.innerHTML = `<span>${m.name}</span><span class="plat">${m.platform}</span><span class="x">✕</span>`;
+    it.querySelector(".x").onclick = () => {
+      COLL[COLL_CUR] = mem.filter(x => !(x.name===m.name && x.platform===m.platform));
+      saveColl(); renderCollList(); renderMembers(); renderPool();
+    };
+    box.appendChild(it);
+  }
+}
+function renderPool(){
+  const box = el("collPool"); box.innerHTML = "";
+  if (!COLL_CUR) return;
+  const q = el("collFilter").value.trim().toLowerCase();
+  const have = new Set(((COLL[COLL_CUR]||[]).map(m => m.platform+"|"+m.name)));
+  for (const g of COLL_GAMES){
+    if (have.has(g.platform+"|"+g.name)) continue;
+    if (q && !g.name.toLowerCase().includes(q)) continue;
+    const it = document.createElement("div");
+    it.className = "coll-item";
+    it.innerHTML = `<span>${g.name}</span><span class="plat">${g.platform}</span>`;
+    it.onclick = () => {
+      (COLL[COLL_CUR] = COLL[COLL_CUR] || []).push({name:g.name, platform:g.platform});
+      saveColl(); renderCollList(); renderMembers(); renderPool();
+    };
+    box.appendChild(it);
+  }
+}
+el("btnColl").onclick = openColl;
+el("collClose").onclick = closeColl;
+el("collModal").addEventListener("click", (e) => { if (e.target === el("collModal")) closeColl(); });
+el("collFilter").oninput = renderPool;
+el("collAdd").onclick = () => {
+  const n = el("collNew").value.trim(); if (!n) return;
+  if (!COLL[n]) COLL[n] = [];
+  el("collNew").value = ""; COLL_CUR = n; saveColl(); renderCollList(); selectColl(n);
+};
+el("collDel").onclick = () => {
+  if (!COLL_CUR) return;
+  if (!confirm(`Usunąć kolekcję „${COLL_CUR}"? (folder na dysku zostaje — usuń ręcznie)`)) return;
+  delete COLL[COLL_CUR]; COLL_CUR = Object.keys(COLL)[0] || null;
+  saveColl(); renderCollList(); selectColl(COLL_CUR);
+};
+el("collGenAll").onclick = async () => {
+  el("collMsg").textContent = "Tworzę foldery…";
+  try{
+    const r = await api("generate_all_collections");
+    let m = `Utworzono ${r.made} skrótów w ${r.count} kolekcjach (LINKS/Kolekcje/).`;
+    if (r.missing && r.missing.length) m += `\nBrakujące: ${r.missing.slice(0,6).join(", ")}`;
+    el("collMsg").textContent = "Gotowe ✓"; alert(m); loadPlatforms();
+  }catch(e){ el("collMsg").textContent = "Błąd: " + e.message; }
+};
+
 el("btnSettings").onclick = openSettings;
 el("setClose").onclick = closeSettings;
 el("setCancel").onclick = closeSettings;

@@ -769,6 +769,37 @@ class Api:
         except Exception:
             pass
 
+    # --- kolekcje serii (LINKS/Kolekcje/) ---
+    def collections_data(self) -> dict:
+        """Kolekcje z configu + wszystkie skróty do wyboru."""
+        from pylinks.services.collections import enumerate_link_games
+        cfg = _load_config()
+        return {"collections": cfg.get("collections", {}) or {},
+                "games": enumerate_link_games(LINKS_DIR)}
+
+    def save_collections(self, collections: dict) -> dict:
+        """Zapisuje całą strukturę kolekcji (config.collections)."""
+        self._save_config_value("collections", collections or {})
+        return {"ok": True}
+
+    def generate_collection(self, name: str) -> dict:
+        """Buduje folder LINKS/Kolekcje/<name>/ z aktualnych członków."""
+        from pylinks.services.collections import generate_collection
+        coll = (_load_config().get("collections", {}) or {}).get(name, [])
+        res = generate_collection(LINKS_DIR, name, coll)
+        _ICON_URI_CACHE.clear()
+        return res
+
+    def generate_all_collections(self) -> dict:
+        from pylinks.services.collections import generate_collection
+        colls = _load_config().get("collections", {}) or {}
+        total, missing = 0, []
+        for name, members in colls.items():
+            r = generate_collection(LINKS_DIR, name, members)
+            total += r["made"]; missing += r["missing"]
+        _ICON_URI_CACHE.clear()
+        return {"ok": True, "made": total, "missing": missing, "count": len(colls)}
+
     # --- config ---
     def get_config(self) -> dict:
         """Config dla UI — sekrety ZAMASKOWANE (nie ujawniamy kluczy).

@@ -22,6 +22,7 @@
       <button class="btn ghost" id="btnMode" title="Tryb grafiki: Ikony (kwadrat, skróty .lnk) / Steam (portret do biblioteki Steam)">🖼 Tryb: Ikony</button>
       <button class="btn ghost" id="btnFit" title="Dopasowanie ikony (kwadrat): całość vs wypełnij">⬚ Dopasowanie</button>
       <button class="btn ghost" id="btnPing" title="Test mostu Python↔JS">⚡ Test mostu</button>
+      <button class="btn ghost" id="btnColl">📁 Kolekcje</button>
       <button class="btn ghost" id="btnSettings">⚙ Ustawienia</button>
     </div>
   </header>
@@ -82,6 +83,38 @@
     <button class="ctx-item" data-act="crop">✂ Kadruj (przeciągnij)</button>
     <button class="ctx-item" data-act="frame">▦ Ramki</button>
     <button class="ctx-item" data-act="default">↺ Domyślne</button>
+  </div>
+
+  <!-- Kolekcje serii -->
+  <div id="collModal" class="modal" hidden>
+    <div class="modal-box" style="width:min(780px,96vw);height:84vh;resize:none">
+      <div class="modal-head">
+        <div class="modal-title">📁 Kolekcje serii</div>
+        <button class="btn ghost" id="collClose">✕</button>
+      </div>
+      <div class="coll-body">
+        <div class="coll-left">
+          <div class="coll-newrow">
+            <input id="collNew" type="text" placeholder="Nazwa nowej kolekcji…">
+            <button class="btn mini" id="collAdd">+</button>
+          </div>
+          <div id="collList" class="coll-list"></div>
+        </div>
+        <div class="coll-right">
+          <div id="collTitle" class="coll-rt-title muted">Wybierz kolekcję po lewej</div>
+          <div class="coll-sec"><div class="coll-sec-h">W kolekcji <span id="collMemCount" class="muted"></span></div>
+            <div id="collMembers" class="coll-scroll"></div></div>
+          <div class="coll-sec">
+            <div class="coll-sec-h">Dodaj gry <input id="collFilter" type="search" placeholder="filtruj…"></div>
+            <div id="collPool" class="coll-scroll"></div></div>
+        </div>
+      </div>
+      <div class="set-foot">
+        <button class="btn" id="collGenAll">Utwórz foldery (wszystkie)</button>
+        <button class="btn ghost" id="collDel">Usuń kolekcję</button>
+        <span id="collMsg" class="muted"></span>
+      </div>
+    </div>
   </div>
 
   <!-- Ustawienia -->

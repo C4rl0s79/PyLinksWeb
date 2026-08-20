@@ -193,6 +193,27 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 }
 .ctx-item:hover{background:var(--bg3)}
 
+/* ── Kolekcje serii ── */
+.coll-body{flex:1 1 auto;min-height:0;display:flex;gap:14px;padding:14px 16px}
+.coll-left{width:240px;flex:0 0 auto;display:flex;flex-direction:column;gap:8px;min-height:0}
+.coll-newrow{display:flex;gap:6px}
+.coll-newrow input{flex:1;background:var(--bg2);color:var(--fg);border:1px solid var(--bg3);border-radius:7px;padding:7px 9px;font-size:13px;outline:none}
+.coll-list{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:4px}
+.coll-list button{text-align:left;background:var(--bg3);color:var(--fg);border:0;cursor:pointer;padding:8px 10px;border-radius:7px;font-size:13px;display:flex;justify-content:space-between;gap:8px}
+.coll-list button.active{background:var(--acc);color:var(--bg);font-weight:600}
+.coll-list .n{background:var(--bg);color:var(--fg2);border-radius:999px;padding:0 7px;font-size:11px}
+.coll-list button.active .n{background:rgba(30,30,46,.25);color:var(--bg)}
+.coll-right{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;gap:12px}
+.coll-rt-title{font-weight:700;font-size:14px}
+.coll-sec{display:flex;flex-direction:column;gap:6px;min-height:0;flex:1}
+.coll-sec-h{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--fg2);display:flex;align-items:center;gap:8px}
+.coll-sec-h input{margin-left:auto;background:var(--bg2);color:var(--fg);border:1px solid var(--bg3);border-radius:6px;padding:4px 8px;font-size:12px;outline:none}
+.coll-scroll{flex:1;min-height:0;overflow-y:auto;border:1px solid var(--bg3);border-radius:8px;padding:4px}
+.coll-item{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;font-size:12px;cursor:pointer}
+.coll-item:hover{background:var(--bg3)}
+.coll-item .plat{color:var(--fg2);font-size:11px;margin-left:auto;background:var(--bg3);padding:1px 7px;border-radius:999px}
+.coll-item .x{color:var(--red);cursor:pointer;font-weight:700}
+
 /* ── Ustawienia ── */
 .set-body{flex:1 1 auto;min-height:0;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:18px}
 .set-sec{display:flex;flex-direction:column;gap:9px}
