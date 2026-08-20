@@ -82,6 +82,71 @@
     <button class="ctx-item" data-act="default">↺ Domyślne</button>
   </div>
 
+  <!-- Ustawienia -->
+  <div id="setModal" class="modal" hidden>
+    <div class="modal-box" style="width:min(820px,96vw);height:88vh;resize:none">
+      <div class="modal-head">
+        <div class="modal-title">⚙ Ustawienia</div>
+        <button class="btn ghost" id="setClose">✕</button>
+      </div>
+      <div class="set-body" id="setBody">
+        <section class="set-sec">
+          <h3>Klucze API</h3>
+          <label>SteamGridDB API Key <input id="s_sgdb" type="text" spellcheck="false"></label>
+          <label>Steam Web API Key <input id="s_steamkey" type="text" spellcheck="false"></label>
+          <label>SteamID64 <input id="s_steamid" type="text" spellcheck="false"></label>
+          <label class="chk"><input id="s_usewebapi" type="checkbox"> Używaj Steam Web API</label>
+          <button class="btn ghost" id="s_testsgdb">Testuj SGDB</button>
+          <span id="s_sgdbres" class="muted"></span>
+        </section>
+
+        <section class="set-sec">
+          <h3>Skan PC</h3>
+          <label>Steam.exe <span class="inln"><input id="s_steamexe" type="text" spellcheck="false"><button class="btn ghost" id="s_detect">Wykryj</button></span></label>
+          <label>Folder „Extra" <input id="s_extradir" type="text" spellcheck="false"></label>
+          <label class="chk"><input id="s_epic" type="checkbox"> Skanuj Epic</label>
+          <label class="chk"><input id="s_gog" type="checkbox"> Skanuj GOG</label>
+        </section>
+
+        <section class="set-sec">
+          <h3>Grafiki / Grzbiety</h3>
+          <label class="chk"><input id="s_spine" type="checkbox"> Grzbiet platformy na ikonach ROM</label>
+          <label>Strona grzbietu
+            <select id="s_spineside"><option value="left">lewa</option><option value="right">prawa</option></select>
+          </label>
+          <label>Folder logotypów platform <input id="s_logodir" type="text" spellcheck="false"></label>
+        </section>
+
+        <section class="set-sec">
+          <h3>Źródła dodatkowe</h3>
+          <label class="chk"><input id="s_steamcdn" type="checkbox"> Steam CDN (bez klucza)</label>
+          <label class="chk"><input id="s_igdb" type="checkbox"> IGDB</label>
+          <label>IGDB Client ID <input id="s_igdbid" type="text" spellcheck="false"></label>
+          <label>IGDB Client Secret <input id="s_igdbsec" type="text" spellcheck="false"></label>
+          <label class="chk"><input id="s_tgdb" type="checkbox"> TheGamesDB</label>
+          <label>TGDB API Key <input id="s_tgdbkey" type="text" spellcheck="false"></label>
+        </section>
+
+        <section class="set-sec">
+          <h3>ROM-y</h3>
+          <label class="chk"><input id="s_romen" type="checkbox"> Włącz obsługę ROM-ów</label>
+          <label>Wspólny folder ROM <input id="s_baserom" type="text" spellcheck="false"></label>
+          <label>Wspólny folder emulatorów <input id="s_baseemu" type="text" spellcheck="false"></label>
+          <div class="rom-tbl-wrap"><table class="rom-tbl" id="romTbl">
+            <thead><tr><th>System</th><th>Folder ROM</th><th>Emulator</th><th>Rozszerzenia</th><th>Args</th><th>Sub</th><th></th></tr></thead>
+            <tbody id="romTblBody"></tbody>
+          </table></div>
+          <button class="btn ghost" id="s_romadd">+ Dodaj system</button>
+        </section>
+      </div>
+      <div class="set-foot">
+        <button class="btn" id="setSave">Zapisz</button>
+        <button class="btn ghost" id="setCancel">Anuluj</button>
+        <span id="setMsg" class="muted"></span>
+      </div>
+    </div>
+  </div>
+
   <!-- Okno kadrowania (chwyć i przeciągnij) -->
   <div id="cropModal" class="modal" hidden>
     <div class="modal-box" style="width:auto;height:auto;max-height:92vh;resize:none">

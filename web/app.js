@@ -735,7 +735,104 @@ el("btnPing").onclick = async () => {
   try{ const r = await api("ping","hi"); setBridge(true,"OK (ping "+(r.echo||"")+")"); }
   catch(e){ setBridge(false, e.message); }
 };
-el("btnSettings").onclick = () => alert("Ustawienia dojdą w Fazie 2.");
+// ── Ustawienia ──────────────────────────────────────────────────────────────
+const sv = (id) => el(id).value.trim();
+const sc = (id) => el(id).checked;
+async function openSettings(){
+  let cfg;
+  try{ cfg = await api("get_config"); }catch(e){ alert("Brak mostu."); return; }
+  const ak = cfg.api_keys || {}, es = cfg.extra_sources || {}, rs = cfg.rom_support || {};
+  el("s_sgdb").value = ak.sgdb_key || "";
+  el("s_steamkey").value = ak.steam_api_key || "";
+  el("s_steamid").value = ak.steam_id64 || "";
+  el("s_usewebapi").checked = !!cfg.use_steam_web_api;
+  el("s_steamexe").value = cfg.steam_exe || "";
+  el("s_extradir").value = cfg.extra_dir || "";
+  el("s_epic").checked = cfg.scan_epic !== false;
+  el("s_gog").checked = cfg.scan_gog !== false;
+  el("s_spine").checked = !!cfg.icon_platform_spine;
+  el("s_spineside").value = cfg.icon_spine_side || "left";
+  el("s_logodir").value = cfg.platform_logo_dir || "";
+  el("s_steamcdn").checked = es.steam_cdn !== false;
+  el("s_igdb").checked = !!es.igdb;
+  el("s_igdbid").value = es.igdb_client_id || "";
+  el("s_igdbsec").value = es.igdb_client_secret || "";
+  el("s_tgdb").checked = !!es.tgdb;
+  el("s_tgdbkey").value = es.tgdb_key || "";
+  el("s_romen").checked = !!rs.enabled;
+  el("s_baserom").value = rs.base_rom_dir || "";
+  el("s_baseemu").value = rs.base_emu_dir || "";
+  romTblRender(rs.systems || []);
+  el("setMsg").textContent = "";
+  el("setModal").hidden = false;
+}
+function closeSettings(){ el("setModal").hidden = true; }
+
+function romRow(s){
+  const tr = document.createElement("tr");
+  const cell = (val, cls="") => `<td class="${cls}"><input type="text" value="${(val||'').replace(/"/g,'&quot;')}"></td>`;
+  tr.innerHTML =
+    cell(s.name) + cell(s.rom_dir) + cell(s.emulator) + cell(s.primary_ext) + cell(s.launch_args) +
+    `<td class="sub"><input type="checkbox" ${s.roms_in_subdirs?'checked':''}></td>` +
+    `<td><button class="del" title="Usuń">✕</button></td>`;
+  tr.querySelector(".del").onclick = () => tr.remove();
+  return tr;
+}
+function romTblRender(systems){
+  const b = el("romTblBody"); b.innerHTML = "";
+  for (const s of systems) b.appendChild(romRow(s));
+}
+function romTblCollect(){
+  const out = [];
+  for (const tr of el("romTblBody").querySelectorAll("tr")){
+    const inp = tr.querySelectorAll("input[type=text]");
+    const name = inp[0].value.trim();
+    if (!name) continue;
+    out.push({
+      name, rom_dir: inp[1].value.trim(), emulator: inp[2].value.trim(),
+      primary_ext: inp[3].value.trim() || "m3u,cue,iso,chd,bin",
+      launch_args: inp[4].value.trim(),
+      roms_in_subdirs: tr.querySelector("input[type=checkbox]").checked,
+    });
+  }
+  return out;
+}
+
+el("btnSettings").onclick = openSettings;
+el("setClose").onclick = closeSettings;
+el("setCancel").onclick = closeSettings;
+el("setModal").addEventListener("click", (e) => { if (e.target === el("setModal")) closeSettings(); });
+el("s_detect").onclick = async () => {
+  try{ const r = await api("detect_steam"); if (r.steam_exe) el("s_steamexe").value = r.steam_exe;
+       else el("setMsg").textContent = "Nie wykryto Steam.exe"; }catch(e){}
+};
+el("s_testsgdb").onclick = async () => {
+  el("s_sgdbres").textContent = "…";
+  try{ const r = await api("test_sgdb"); el("s_sgdbres").textContent = r.ok ? "✓ klucz OK" : ("✗ " + (r.reason||"błąd")); }
+  catch(e){ el("s_sgdbres").textContent = "✗ błąd"; }
+};
+el("s_romadd").onclick = () => el("romTblBody").appendChild(romRow({primary_ext:"m3u,cue,iso,chd,bin"}));
+el("setSave").onclick = async () => {
+  const patch = {
+    api_keys: {sgdb_key: sv("s_sgdb"), steam_api_key: sv("s_steamkey"), steam_id64: sv("s_steamid")},
+    use_steam_web_api: sc("s_usewebapi"),
+    steam_exe: sv("s_steamexe"), extra_dir: sv("s_extradir"),
+    scan_epic: sc("s_epic"), scan_gog: sc("s_gog"),
+    icon_platform_spine: sc("s_spine"), icon_spine_side: el("s_spineside").value,
+    platform_logo_dir: sv("s_logodir"),
+    extra_sources: {steam_cdn: sc("s_steamcdn"), igdb: sc("s_igdb"),
+      igdb_client_id: sv("s_igdbid"), igdb_client_secret: sv("s_igdbsec"),
+      tgdb: sc("s_tgdb"), tgdb_key: sv("s_tgdbkey")},
+    rom_support: {enabled: sc("s_romen"), base_rom_dir: sv("s_baserom"),
+      base_emu_dir: sv("s_baseemu"), systems: romTblCollect()},
+  };
+  el("setMsg").textContent = "Zapisuję…";
+  try{
+    const r = await api("save_config", patch);
+    if (r.ok){ el("setMsg").textContent = "Zapisano ✓"; setTimeout(closeSettings, 500); }
+    else el("setMsg").textContent = "Błąd: " + (r.reason||"");
+  }catch(e){ el("setMsg").textContent = "Błąd: " + e.message; }
+};
 el("selAll").onclick = () => selectKeys(currentKeys());
 el("selNone").onclick = () => selectKeys([]);
 el("selMissing").onclick = async () => {

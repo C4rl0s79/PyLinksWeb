@@ -31,6 +31,15 @@ def _load_config() -> dict:
     return _default_config()
 
 
+def _deep_merge(dst: dict, patch: dict) -> None:
+    """Rekurencyjny merge patch→dst. Listy i wartości nadpisywane w całości."""
+    for k, v in patch.items():
+        if isinstance(v, dict) and isinstance(dst.get(k), dict):
+            _deep_merge(dst[k], v)
+        else:
+            dst[k] = v
+
+
 def _game_key(g: dict) -> str:
     """Stabilny klucz gry (do ikon/wyboru). Nie zależy od pozycji."""
     src = g.get("source", "pc")
@@ -600,3 +609,32 @@ class Api:
     # --- config ---
     def get_config(self) -> dict:
         return _load_config()
+
+    def save_config(self, patch: dict) -> dict:
+        """Zapisuje zmiany (deep-merge) do config.json. Zwraca zaktualizowany config."""
+        try:
+            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) \
+                if CONFIG_PATH.exists() else _default_config()
+        except Exception:
+            raw = _default_config()
+        _deep_merge(raw, patch or {})
+        try:
+            CONFIG_PATH.write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            return {"ok": False, "reason": str(e)}
+        self._baked.clear()          # ścieżki/klucze mogły się zmienić
+        return {"ok": True, "config": migrate_config(raw)}
+
+    def detect_steam(self) -> dict:
+        """Auto-wykrycie Steam.exe z rejestru."""
+        from pylinks.services.scan_pc import detect_steam_exe
+        return {"steam_exe": detect_steam_exe() or ""}
+
+    def test_sgdb(self) -> dict:
+        """Sprawdza klucz SGDB (tanie zapytanie)."""
+        from pylinks.services.art import SgdbClient
+        cli = SgdbClient((_load_config().get("api_keys", {}) or {}).get("sgdb_key", ""))
+        if not cli.ok:
+            return {"ok": False, "reason": "brak klucza"}
+        return {"ok": bool(cli.search("celeste", 3))}

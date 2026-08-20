@@ -193,6 +193,28 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 }
 .ctx-item:hover{background:var(--bg3)}
 
+/* ── Ustawienia ── */
+.set-body{flex:1 1 auto;min-height:0;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:18px}
+.set-sec{display:flex;flex-direction:column;gap:9px}
+.set-sec h3{margin:0 0 2px;font-size:14px;color:var(--acc)}
+.set-sec label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--fg2)}
+.set-sec label.chk{flex-direction:row;align-items:center;gap:8px;color:var(--fg);font-size:13px;cursor:pointer}
+.set-sec input[type=text],.set-sec select{
+  background:var(--bg2);color:var(--fg);border:1px solid var(--bg3);border-radius:7px;
+  padding:7px 10px;font-size:13px;outline:none;
+}
+.set-sec input[type=text]:focus,.set-sec select:focus{border-color:var(--acc)}
+.set-sec .inln{display:flex;gap:8px}
+.set-sec .inln input{flex:1}
+.set-foot{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:12px 20px;border-top:1px solid var(--bg3);background:var(--bg2)}
+.rom-tbl-wrap{overflow-x:auto;border:1px solid var(--bg3);border-radius:8px}
+.rom-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.rom-tbl th{background:var(--bg2);color:var(--fg2);text-align:left;padding:6px 8px;font-weight:600}
+.rom-tbl td{padding:3px 5px;border-top:1px solid var(--bg3)}
+.rom-tbl input[type=text]{width:100%;min-width:70px;background:var(--bg);color:var(--fg);border:1px solid var(--bg3);border-radius:5px;padding:5px 6px;font-size:12px}
+.rom-tbl td.sub{text-align:center}
+.rom-tbl .del{background:transparent;border:0;color:var(--red);cursor:pointer;font-size:14px}
+
 /* ── Okno kadrowania (chwyć i przeciągnij) ── */
 .crop-wrap{padding:18px;display:flex;flex-direction:column;align-items:center;gap:12px}
 .crop-frame{
