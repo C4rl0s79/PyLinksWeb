@@ -177,6 +177,8 @@ class Api:
         self._rom_games: list[dict] = []
         # cache upieczonych miniatur w RAM: (key,mode,fit,offset) → data-URI
         self._baked: dict = {}
+        # ostatnie ręczne zapytanie/ID per gra (do zapamiętania dopasowania SGDB)
+        self._pending: dict = {}
 
     # --- diagnostyka mostu ---
     def ping(self, msg: str = "") -> dict:
@@ -276,6 +278,30 @@ class Api:
         if source:
             games = [g for g in games if g.get("source") == source]
         return [_slim_game(g) for g in games]
+
+    @staticmethod
+    def _title_override(key: str, cfg: dict) -> str:
+        """Zapamiętane dopasowanie SGDB (query/ID) dla gry — wspólne dla obu trybów."""
+        store = cfg.get("sgdb_override", {}) or {}
+        return str(store.get(key, "") or "") if isinstance(store, dict) else ""
+
+    def _save_override(self, key: str) -> None:
+        """Utrwala ostatnie ręczne zapytanie/ID dla gry (config.sgdb_override)."""
+        q = (self._pending.get(key) or "").strip()
+        if not q:
+            return
+        try:
+            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) \
+                if CONFIG_PATH.exists() else _default_config()
+            store = raw.get("sgdb_override")
+            if not isinstance(store, dict):
+                store = {}
+            store[key] = q
+            raw["sgdb_override"] = store
+            CONFIG_PATH.write_text(json.dumps(raw, ensure_ascii=False, indent=2),
+                                   encoding="utf-8")
+        except Exception:
+            pass
 
     def _find_game(self, key: str) -> dict | None:
         for g in self._pc_games:
@@ -478,7 +504,9 @@ class Api:
         prefer_portrait = (g.get("source") == "rom"
                            and mode != "steam"
                            and bool(cfg.get("icon_platform_spine", False)))
-        res = art.fetch_cover(cfg, CACHE_DIR, key, g, mode, prefer_portrait)
+        override = self._pending.get(key) or self._title_override(key, cfg)
+        res = art.fetch_cover(cfg, CACHE_DIR, key, g, mode, prefer_portrait,
+                              query=override)
         if res.get("found"):
             self._invalidate(key)               # świeżo pobrany raw
             fit, off = self._crop_for(key, cfg)
@@ -494,6 +522,10 @@ class Api:
         if not g:
             return {"key": key, "candidates": [], "reason": "nieznana gra"}
         cfg = _load_config()
+        if query.strip():
+            self._pending[key] = query.strip()          # ręczne — zapamiętaj tymczasowo
+        else:
+            query = self._title_override(key, cfg)       # użyj zapisanego dopasowania
         cands = art.candidates_for_game(cfg, g, query=query, mode=mode)
         if mode != "steam" and not query and g.get("source") != "rom":
             try:
@@ -525,6 +557,7 @@ class Api:
         res = art.save_chosen_cover(CACHE_DIR, key, url, mode)
         if res.get("found"):
             self._save_selection(key, url, mode)
+            self._save_override(key)          # zapamiętaj dopasowanie (oba tryby)
             self._invalidate(key)
             fit, off = self._crop_for(key, _load_config())
             res["fit"], res["offset"] = fit, off
@@ -556,6 +589,10 @@ class Api:
             return {"ok": False, "reason": "nieznana gra",
                     "grid": [], "hero": [], "logo": []}
         cfg = _load_config()
+        if query.strip():
+            self._pending[key] = query.strip()
+        else:
+            query = self._title_override(key, cfg)       # wspólne z trybem ikon
         res = art.steam_art_options(cfg, g, query=query)
         # bieżące wybory jako URL-e (do podświetlenia wariantu w UI)
         store = cfg.get("steam_art_by_key", {}) or {}
@@ -570,6 +607,7 @@ class Api:
         res = art.save_steam_asset(CACHE_DIR, key, asset, url)
         if res.get("found"):
             self._save_steam_asset_sel(key, asset, url)
+            self._save_override(key)          # zapamiętaj dopasowanie (oba tryby)
         return {"key": key, "asset": asset, "found": res.get("found", False),
                 "data_uri": res.get("data_uri")}
 

@@ -303,7 +303,8 @@ def raw_cover(cache_dir: Path, key: str, mode: str = "icon") -> str | None:
 
 
 def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict,
-                mode: str = "icon", prefer_portrait: bool = False) -> dict:
+                mode: str = "icon", prefer_portrait: bool = False,
+                query: str = "") -> dict:
     """Pobiera (lub czyta z cache) grafikę gry dla trybu.
 
     icon  → KWADRAT (kwadratowe gridy → ikony → portret jako ostateczność)
@@ -322,7 +323,7 @@ def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict,
         return {"key": key, "found": False, "data_uri": None, "cached": False,
                 "reason": "brak klucza SGDB"}
 
-    ref = _resolve_ref(client, game, "")
+    ref = _resolve_ref(client, game, query)   # query = nadpisanie tytułu/ID (per gra)
     if not ref:
         return {"key": key, "found": False, "data_uri": None, "cached": False}
     kind_id, val = ref
