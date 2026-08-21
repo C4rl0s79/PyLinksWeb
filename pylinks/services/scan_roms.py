@@ -14,13 +14,15 @@ from pathlib import Path
 _BASE_EXTS = {"m3u", "chd", "cue", "iso", "bin", "img", "ccd", "sub", "mdf",
               "nrg", "zip", "7z", "lnk"}
 
-_DISC_RE = re.compile(r"\s*[\(\[](Disc|Disk|CD|Side)\s*\d+[\)\]]", re.IGNORECASE)
-
 _MAIN_FILE_EXT_RANK = {
     "lnk": 0, "m3u": 0, "cue": 1, "gdi": 2, "ccd": 3, "mds": 4, "mdf": 40,
     "cdi": 10, "chd": 11, "iso": 12, "rvz": 13, "cso": 14, "pbp": 15, "nrg": 30,
     "bin": 90, "img": 91, "raw": 92, "sub": 93,
 }
+
+
+_BS = chr(92)                       # ukosnik odwrotny (bez literalu w kodzie)
+_LNK_EXTRA_EXTS = {"iso", "xex", "rvz", "cso", "pbp", "wud", "wux", "gdi", "cdi"}
 
 
 def strip_region(name: str) -> str:
@@ -82,6 +84,38 @@ def _m3u_refs(m3u: Path) -> set[Path]:
     return refs
 
 
+def _lnk_refs(lnk: Path) -> set:
+    """Pliki ROM, na ktore wskazuje skrot .lnk (target + argumenty).
+
+    Foldery ROM-ow bywaja pelne gotowych skrotow (X360/Xenia, PS3/RPCS3) lezacych
+    OBOK surowych .iso. Bez tego ta sama gra wchodzila dwa razy: raz jako
+    dzialajacy .lnk, raz jako surowy plik bez emulatora. Nazwy potrafia sie roznic
+    ("Halo.lnk" -> "Halo (USA) [XGD3].iso"), wiec czytamy ZAWARTOSC skrotu.
+
+    .lnk trzyma sciezki jako UTF-16LE - wyciagamy je z surowych bajtow, bez COM
+    (skan bywa wolany z watku roboczego, a inicjalizacja COM jest tam zbedna).
+    """
+    refs: set = set()
+    try:
+        raw = lnk.read_bytes()
+    except Exception:
+        return refs
+    # bloki tekstu w .lnk nie zawsze zaczynaja sie na parzystym bajcie, wiec
+    # dekodujemy OBA wyrownania - inaczej czesc skrotow "nie ma" sciezki
+    text = (raw.decode("utf-16-le", errors="ignore")
+            + chr(0) + raw[1:].decode("utf-16-le", errors="ignore"))
+    exts = "|".join(sorted(_BASE_EXTS | _LNK_EXTRA_EXTS))
+    pat = ("[A-Za-z]:" + _BS + _BS + "[^" + chr(0) + chr(34) + "<>|*?]+?"
+           + _BS + ".(?:" + exts + ")")
+    for m in re.finditer(pat, text, re.IGNORECASE):
+        cand = Path(m.group(0))
+        try:
+            refs.add(cand.resolve())
+        except Exception:
+            refs.add(cand)
+    return refs
+
+
 def _cue_gdi_refs(path: Path) -> set[Path]:
     refs: set[Path] = set()
     try:
@@ -114,6 +148,8 @@ def _rom_m3u_bundle(roms: list[Path], primary_ext: list[str] | None = None) -> l
     for sheet in game_files:
         if sheet.suffix.lower() in (".cue", ".gdi"):
             covered |= _cue_gdi_refs(sheet)
+        elif sheet.suffix.lower() == ".lnk":
+            covered |= _lnk_refs(sheet)   # skrót pokrywa ROM, który uruchamia
 
     def _res(p):
         try:

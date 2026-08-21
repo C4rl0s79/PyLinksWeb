@@ -21,7 +21,12 @@ Reports/
 # build / pakowanie
 build/
 dist/
+build_out.log
 *.spec
+!pylinks_web.spec   # nasz spec śledzimy w repo
+
+# testy (nie idą na GitHub — absolutne minimum)
+tests/
 
 # IDE / OS
 .idea/

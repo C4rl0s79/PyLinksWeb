@@ -27,7 +27,14 @@ import webview
 from pylinks.api import Api
 from pylinks import __version__
 
-_WEB_DIR = Path(__file__).resolve().parent / "web"
+def _resource_root() -> Path:
+    """Katalog zasobów (web/). Frozen (PyInstaller) = rozpakowany bundle
+    (sys._MEIPASS); zwykłe uruchomienie = katalog tego pliku."""
+    base = getattr(sys, "_MEIPASS", None)
+    return Path(base) if base else Path(__file__).resolve().parent
+
+
+_WEB_DIR = _resource_root() / "web"
 _WEB = _WEB_DIR / "index.html"
 
 
@@ -58,23 +65,53 @@ def _single_instance_guard() -> "object | None":
         return None
 
 
+def _startup_log(msg: str, to_file: bool = True) -> None:
+    """Diagnostyka startu → stderr, a przy błędach też plik obok exe. Kluczowe
+    dla wersji frozen (console=False): bez tego błędy startu są niewidoczne."""
+    if to_file:
+        try:
+            from pylinks.app_paths import SCRIPT_DIR
+            with (SCRIPT_DIR / "startup.log").open("a", encoding="utf-8") as f:
+                f.write(msg + "\n")
+        except Exception:
+            pass
+    try:
+        print(msg, file=sys.stderr)
+    except Exception:
+        pass
+
+
 def main() -> int:
     lock = _single_instance_guard()
     if lock is None:
         print("PyLinks już działa — zamknij poprzednie okno przed nowym startem.")
         return 0
-    api = Api()
-    window = webview.create_window(
-        title=f"PyLinks {__version__}",
-        html=_build_html(),          # inline (css+js wklejone) = zero cache podzasobów
-        js_api=api,
-        width=1280, height=800,
-        min_size=(900, 560),
-        background_color="#1e1e2e",
-    )
-    # debug=True → prawy-klik „Inspect" (DevTools) do podglądu HTML/CSS
-    webview.start(debug=("--debug" in sys.argv))
-    return 0
+    _dbg = ("--debug" in sys.argv) or bool(os.environ.get("PLW_DEBUG"))
+    if _dbg:
+        import logging
+        logging.basicConfig(level=logging.DEBUG, stream=sys.stderr,
+                            format="%(name)s %(levelname)s: %(message)s")
+    try:
+        if _dbg:
+            _startup_log(f"start: frozen={getattr(sys,'frozen',False)} "
+                         f"webdir={_WEB_DIR} index_exists={_WEB.exists()}",
+                         to_file=False)
+        api = Api()
+        webview.create_window(
+            title=f"PyLinks {__version__}",
+            html=_build_html(),      # inline (css+js wklejone) = zero cache podzasobów
+            js_api=api,
+            width=1280, height=800,
+            min_size=(900, 560),
+            background_color="#1e1e2e",
+        )
+        # debug=True → prawy-klik „Inspect" (DevTools) do podglądu HTML/CSS
+        webview.start(debug=_dbg)
+        return 0
+    except Exception:
+        import traceback
+        _startup_log("BŁĄD STARTU:\n" + traceback.format_exc())
+        raise
 
 
 if __name__ == "__main__":

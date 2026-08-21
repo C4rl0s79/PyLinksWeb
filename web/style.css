@@ -137,7 +137,7 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 }
 /* ── grzbiet platformy (spine) ── */
 .card .thumb .spine{
-  position:absolute; top:0; bottom:0; width:22%; z-index:2;
+  position:absolute; top:0; bottom:0; width:var(--spine-w,22%); z-index:2;
   background:#141414; display:flex; align-items:center; justify-content:center;
   box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);
 }
@@ -150,8 +150,10 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 }
 .card .thumb.spine-right .spine img{transform:rotate(90deg)}
 /* grafika ustępuje miejsca grzbietowi */
-.card .thumb.spine-left  img.cover{position:absolute;top:0;height:100%;left:22%;width:78%}
-.card .thumb.spine-right img.cover{position:absolute;top:0;height:100%;left:0;width:78%}
+.card .thumb.spine-left  img.cover{position:absolute;top:0;height:100%;
+  left:var(--spine-w,22%);width:calc(100% - var(--spine-w,22%))}
+.card .thumb.spine-right img.cover{position:absolute;top:0;height:100%;
+  left:0;width:calc(100% - var(--spine-w,22%))}
 .card .thumb .src{
   position:absolute;top:6px;left:6px;font-size:10px;font-weight:700;
   padding:2px 7px;border-radius:999px;background:var(--bg2);color:var(--fg);
@@ -329,7 +331,6 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
   grid-column:1/-1; display:flex; align-items:center; gap:12px;
   color:var(--fg2); padding:20px 0; justify-content:center;
 }
-.pk-item.chosen{border-color:var(--grn)}
 .pk-item.busy{opacity:.5}
 .pk-item.broken{display:none}   /* nie pokazuj pustych ramek — użyj ↻ Odśwież */
 
@@ -339,7 +340,7 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 .pk-sec-h{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
   color:var(--fg2);margin:0 2px 8px}
 .pk-row{display:flex;gap:10px;overflow-x:auto;padding-bottom:8px}
-.pk-row .pk-item{flex:0 0 auto; width:auto}
+.pk-row .pk-item{flex:0 0 auto; width:auto; position:relative}
 /* poziome paski: pełny obraz w naturalnych proporcjach (contain), stała wysokość */
 .pk-row .pk-item img{height:180px; width:auto; max-width:360px; object-fit:contain; background:var(--bg3)}
 .pk-row-logo .pk-item img{
@@ -350,3 +351,71 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 ::-webkit-scrollbar-thumb{background:var(--bg3);border-radius:8px}
 ::-webkit-scrollbar-thumb:hover{background:#45475a}
 ::-webkit-scrollbar-track{background:transparent}
+
+/* ── Edytor logo grzbietu ── */
+.logo-ed{display:flex;flex-direction:column;gap:14px;padding:4px 2px}
+.logo-ed-top{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap}
+.logo-ed-top label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--fg2)}
+.logo-ed-top select{min-width:200px}
+.logo-ed-body{display:grid;grid-template-columns:280px 1fr;gap:18px;min-height:0}
+.logo-ed-preview{display:flex;flex-direction:column}
+.logo-ed-prev-img{width:256px;height:256px;object-fit:contain;border-radius:10px;
+  background:repeating-conic-gradient(var(--bg3) 0% 25%,var(--bg2) 0% 50%) 50%/18px 18px;
+  border:1px solid var(--bg3)}
+.logo-ed-scale{margin-top:12px;display:flex;flex-direction:column;gap:6px}
+.logo-ed-scale input[type=range]{width:256px}
+.logo-ed-variants{min-width:0;display:flex;flex-direction:column;min-height:0}
+.logo-var-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));
+  gap:8px;overflow-y:auto;max-height:360px;align-content:start;grid-auto-rows:max-content;padding:2px}
+.logo-var{border:2px solid transparent;border-radius:8px;cursor:pointer;padding:6px;
+  background:repeating-conic-gradient(#2a2a33 0% 25%,#20202a 0% 50%) 50%/12px 12px;
+  display:flex;align-items:center;justify-content:center;height:80px}
+.logo-var:hover{border-color:var(--acc2,#89b4fa)}
+.logo-var.sel{border-color:var(--acc,#a6e3a1)}
+.logo-var img{max-width:100%;max-height:68px;object-fit:contain}
+
+/* ── lista dodatkowych folderów (Extra) ── */
+.dir-list{display:flex;flex-direction:column;gap:4px;margin:4px 0}
+.dir-list:empty{display:none}
+.dir-item{display:flex;align-items:center;gap:8px;background:var(--bg3,#313244);
+  border-radius:6px;padding:4px 6px 4px 10px}
+.dir-item .dir-path{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-size:12px}
+.dir-item .dir-del{background:none;border:none;color:var(--fg2,#a6adc8);
+  cursor:pointer;font-size:14px;padding:2px 6px;border-radius:4px}
+.dir-item .dir-del:hover{background:rgba(243,139,168,.2);color:#f38ba8}
+
+/* ── pasek prefetchu grafik Steam (pod topbarem) ── */
+.pf-bar{display:flex;align-items:center;gap:10px;padding:6px 16px;
+  background:var(--bg2);border-bottom:1px solid var(--bg3)}
+.pf-bar[hidden]{display:none}
+.pf-track{flex:1;height:8px;background:var(--bg3);border-radius:999px;overflow:hidden}
+.pf-fill{height:100%;width:0;background:var(--acc);border-radius:999px;
+  transition:width .25s ease}
+.pf-txt{font-size:12px;color:var(--fg2);white-space:nowrap;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;max-width:46%}
+/* .btn.mini definiowane wyżej (z flex:0 0 auto) — nie duplikować */
+
+/* nagłówek menu grupy (prawy klik na grupie PC/ROM) */
+.ctx .ctx-head{padding:6px 12px 4px;font-size:11px;text-transform:uppercase;
+  letter-spacing:.5px;color:var(--fg2);border-bottom:1px solid var(--bg3);margin-bottom:4px}
+
+/* ── tryb Steam: pasek „Wybrane" (aktualne grid/tło/logo) ── */
+.pk-current{margin-bottom:14px;padding:10px;background:var(--bg2);
+  border:1px solid var(--bg3);border-radius:10px}
+.pk-cur-h{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+  color:var(--fg2);margin-bottom:8px}
+.pk-cur-row{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end}
+.pk-cur-slot{display:flex;flex-direction:column;gap:4px}
+.pk-cur-lbl{font-size:11px;color:var(--fg2)}
+.pk-cur-img{height:96px;width:auto;max-width:260px;object-fit:contain;
+  border-radius:6px;background:var(--bg3);border:2px solid var(--grn)}
+.pk-cur-logo{background:repeating-conic-gradient(var(--bg3) 0% 25%,var(--bg2) 0% 50%) 50%/14px 14px}
+.pk-cur-none{height:96px;min-width:120px;display:flex;align-items:center;
+  justify-content:center;color:var(--fg2);font-size:12px;background:var(--bg3);
+  border:1px dashed #45475a;border-radius:6px}
+/* wybrany wariant w wierszu — wyraźniejszy */
+.pk-item.chosen{border-color:var(--grn);box-shadow:0 0 0 2px var(--grn)}
+.pk-item.chosen::after{content:"✓";position:absolute;top:4px;right:4px;z-index:3;
+  width:20px;height:20px;border-radius:50%;background:var(--grn);color:#11111b;
+  font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center}

@@ -319,7 +319,7 @@ def _steam_asset_bytes(cache_dir: Path, key: str, asset: str) -> "bytes | None":
 
 
 # ── orkiestracja ───────────────────────────────────────────────────────────
-def export_to_steam(cfg: dict, games: list, cache_dir: Path) -> dict:
+def export_to_steam(cfg: dict, games: list, cache_dir: Path, progress=None) -> dict:
     from pylinks.api import _game_key
     configs = find_userdata_configs(cfg.get("steam_exe", ""),
                                     cfg.get("steam_userdata_dir", ""))
@@ -347,7 +347,13 @@ def export_to_steam(cfg: dict, games: list, cache_dir: Path) -> dict:
     exe_over = cfg.get("exe_override", {}) or {}
     added, art_n, skipped = 0, 0, 0
     tag_appids: dict = {}
-    for g in games:
+    total = len(games)
+    for gi, g in enumerate(games):
+        if progress:
+            try:
+                progress(gi + 1, total, g.get("name", ""))
+            except Exception:
+                pass
         _k0 = _game_key(g)
         if exe_over.get(_k0):
             g["exe_override"] = exe_over[_k0]
@@ -361,12 +367,14 @@ def export_to_steam(cfg: dict, games: list, cache_dir: Path) -> dict:
         if isinstance(store.get(key), dict):
             fit, off = store[key].get("fit", "pad"), float(store[key].get("offset", 0.5))
         spine_sys = g.get("system", "") if (spine_on and g.get("source") == "rom") else ""
-        ico = _exp.bake_ico(cache_dir, key, fit, off, spine_sys, spine_side, logo_dir)
+        ico = _exp.bake_ico(cache_dir, key, fit, off, spine_sys, spine_side, logo_dir,
+                            float(cfg.get("spine_logo_scale", 0.85) or 0.85),
+                            float(cfg.get("icon_spine_frac", 0.22) or 0.22))
         ico_path = ""
         if ico:
-            ip = icons_dir / f"{_exp._safe_ico(key)}.ico"
             try:
-                ip.write_bytes(ico); ico_path = str(ip)
+                # nazwa z hashem treści — inaczej Explorer trzyma starą ikonę
+                ico_path = _exp.write_cache_ico(icons_dir, key, ico)
             except Exception:
                 pass
         entry, appid, plat = _build_entry(g, launch, ico_path)

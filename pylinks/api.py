@@ -200,6 +200,10 @@ class Api:
         self._baked: dict = {}
         # ostatnie ręczne zapytanie/ID per gra (do zapamiętania dopasowania SGDB)
         self._pending: dict = {}
+        # zadanie w tle (pobierz/stwórz wszystko) — stan współdzielony z wątkiem
+        self._job: dict = {"running": False, "kind": "", "done": 0, "total": 0,
+                           "new": 0, "cached": 0, "failed": 0, "current": "",
+                           "phase": "", "cancel": False, "result": None}
 
     # --- diagnostyka mostu ---
     def ping(self, msg: str = "") -> dict:
@@ -384,13 +388,127 @@ class Api:
             })
         return {"enabled": res.get("enabled", False),
                 "total": res.get("total", 0), "systems": out_sys,
-                "spine": {"enabled": spine_on, "side": spine_side}}
+                "spine": {"enabled": spine_on, "side": spine_side,
+                          "frac": float(cfg.get("icon_spine_frac", 0.22) or 0.22)}}
 
     def set_spine(self, enabled: bool, side: str = "left") -> dict:
         self._save_config_value("icon_platform_spine", bool(enabled))
         self._save_config_value("icon_spine_side", "right" if side == "right" else "left")
         return {"ok": True, "enabled": bool(enabled),
                 "side": "right" if side == "right" else "left"}
+
+    # --- warianty logo grzbietu + skala (edytor „ile % zajmuje logo") ---
+    def spine_logo_info(self) -> dict:
+        """Stan edytora grzbietów: styl, skala, dostępne platformy, cache styli."""
+        from pylinks.services import spine_logos as _sl
+        from pylinks.core import spine as _spine
+        cfg = _load_config()
+        logo_dir = cfg.get("platform_logo_dir", "")
+        style = cfg.get("spine_logo_style", "Light - Color")
+        scale = float(cfg.get("spine_logo_scale", 0.85) or 0.85)
+        frac = float(cfg.get("icon_spine_frac", 0.22) or 0.22)
+        # platformy: te faktycznie w kolekcji ROM (jeśli po skanie) + z mapy
+        have = []
+        seen = set()
+        for g in getattr(self, "_rom_games", []):
+            canon = _spine.spine_canon_key(g.get("system", ""))
+            if canon and canon not in seen and _sl.target_for(canon):
+                seen.add(canon)
+                have.append({"key": canon,
+                             "label": _sl.target_for(canon),
+                             "system": g.get("system", "")})
+        if not have:
+            for k, tgt in _sl.PLATFORM_LOGO_TARGET.items():
+                have.append({"key": k, "label": tgt, "system": k})
+        # aktywne logo per platforma (data-URI) — do podglądu
+        for p in have:
+            p["active"] = _spine.platform_logo_uri(logo_dir, p["key"])
+        return {"style": style, "scale": scale, "frac": frac,
+                "styles": _sl.SPINE_LOGO_STYLES,
+                "cached_styles": _sl.cached_styles(logo_dir),
+                "platforms": have, "logo_dir": logo_dir}
+
+    def spine_logo_variants(self, platform: str, style: str = "") -> list:
+        """Warianty logo danej platformy (miniatury data-URI) z lokalnego cache."""
+        from pylinks.services import spine_logos as _sl
+        cfg = _load_config()
+        logo_dir = cfg.get("platform_logo_dir", "")
+        style = style or cfg.get("spine_logo_style", "Light - Color")
+        out = []
+        for v in _sl.list_variants(logo_dir, platform, style):
+            uri = _sl.variant_datauri(v["source"])
+            if uri:
+                out.append({"name": v["name"], "source": v["source"], "thumb": uri})
+        return out
+
+    def set_platform_logo(self, platform: str, source: str) -> dict:
+        """Instaluje wybrany wariant jako aktywne logo platformy."""
+        from pylinks.services import spine_logos as _sl
+        from pylinks.core import spine as _spine
+        cfg = _load_config()
+        logo_dir = cfg.get("platform_logo_dir", "")
+        ok = _sl.install_variant(logo_dir, platform, source)
+        uri = _spine.platform_logo_uri(logo_dir, platform) if ok else None
+        return {"ok": ok, "active": uri}
+
+    def set_spine_logo_scale(self, scale: float) -> dict:
+        s = max(0.30, min(1.0, float(scale)))
+        self._save_config_value("spine_logo_scale", s)
+        return {"ok": True, "scale": s}
+
+    def set_spine_frac(self, frac: float) -> dict:
+        """Szerokość grzbietu jako % szerokości ikony (0.12–0.40)."""
+        f = max(0.12, min(0.40, float(frac)))
+        self._save_config_value("icon_spine_frac", f)
+        return {"ok": True, "frac": f}
+
+    def set_spine_logo_style(self, style: str) -> dict:
+        from pylinks.services import spine_logos as _sl
+        if style in _sl.SPINE_LOGO_STYLES.values():
+            self._save_config_value("spine_logo_style", style)
+            return {"ok": True, "style": style}
+        return {"ok": False}
+
+    def download_logo_variants(self, style: str = "") -> dict:
+        """Pobiera cały zestaw wariantów danej kolorystyki do lokalnego cache."""
+        from pylinks.services import spine_logos as _sl
+        cfg = _load_config()
+        logo_dir = cfg.get("platform_logo_dir", "")
+        style = style or cfg.get("spine_logo_style", "Light - Color")
+        got, total = _sl.download_variants(logo_dir, style)
+        return {"ok": total > 0, "downloaded": got, "total": total, "style": style}
+
+    def spine_preview(self, platform: str, scale: float = None,
+                      frac: float = None) -> dict:
+        """Podgląd grzbietu na przykładowej ikonie (kwadrat) — data-URI PNG."""
+        from pylinks.core import spine as _spine
+        import base64
+        from io import BytesIO
+        try:
+            from PIL import Image, ImageDraw
+        except Exception:
+            return {"ok": False}
+        cfg = _load_config()
+        logo_dir = cfg.get("platform_logo_dir", "")
+        side = cfg.get("icon_spine_side", "left")
+        sc = float(cfg.get("spine_logo_scale", 0.85) if scale is None else scale)
+        fr = float(cfg.get("icon_spine_frac", 0.22) if frac is None else frac)
+        fr = max(0.12, min(0.40, fr))
+        # przykładowy plakat (gradient) jako podkład
+        s = 256
+        base = Image.new("RGBA", (int(s * 0.72), s), (0, 0, 0, 255))
+        d = ImageDraw.Draw(base)
+        for y in range(s):
+            t = y / s
+            d.line([(0, y), (base.width, y)],
+                   fill=(int(40 + 60 * t), int(50 + 40 * t), int(90 + 50 * t), 255))
+        img = _spine.add_platform_spine(base, platform, side, frac=fr,
+                                        logo_dir=logo_dir, logo_scale=sc)
+        if img is None:
+            return {"ok": False}
+        buf = BytesIO(); img.convert("RGBA").save(buf, "PNG")
+        uri = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        return {"ok": True, "preview": uri, "scale": sc, "frac": fr}
 
     def get_rom_games(self, system: str = "") -> list:
         games = self._rom_games
@@ -708,23 +826,198 @@ class Api:
         entry = store.get(key, {}) if isinstance(store, dict) else {}
         res["current"] = {a: (entry.get(a) if isinstance(entry, dict) else None)
                           for a in ("grid", "hero", "logo")}
+        # aktualnie ZAPISANE grafiki (z cache) — to, co realnie pójdzie do Steama.
+        # MINIATURY, nie oryginały: hero potrafi mieć 45 MB (animowany webp),
+        # a most przesyła base64 → okno zamierało.
+        res["cached"] = {a: art.cached_steam_asset_thumb(CACHE_DIR, key, a)
+                         for a in ("grid", "hero", "logo")}
         res["key"] = key
         return res
 
     def choose_steam_asset(self, key: str, asset: str, url: str) -> dict:
         """Przypina wariant danego typu (grid/hero/logo) i zapisuje w config."""
         res = art.save_steam_asset(CACHE_DIR, key, asset, url)
-        if res.get("found"):
-            self._save_steam_asset_sel(key, asset, url)
-            self._save_override(key)          # zapamiętaj dopasowanie (oba tryby)
-        return {"key": key, "asset": asset, "found": res.get("found", False),
-                "data_uri": res.get("data_uri")}
+        if not res.get("found"):
+            return {"key": key, "asset": asset, "found": False, "data_uri": None}
+        self._save_steam_asset_sel(key, asset, url)
+        self._save_override(key)              # zapamiętaj dopasowanie (oba tryby)
+        # do UI oddajemy MINIATURĘ zapisanego pliku (oryginał hero bywa 45 MB)
+        thumb = art.cached_steam_asset_thumb(CACHE_DIR, key, asset, box=512)
+        return {"key": key, "asset": asset, "found": True,
+                "data_uri": thumb or res.get("data_uri")}
 
     def reset_steam_asset(self, key: str, asset: str) -> dict:
         """Usuwa wybrany wariant danego typu (reset)."""
         art.clear_steam_asset(CACHE_DIR, key, asset)
         self._save_steam_asset_sel(key, asset, None)
         return {"key": key, "asset": asset, "ok": True}
+
+    # --- zadania w tle: pobierz wszystko / stwórz wszystko ---
+    def _games_for_scope(self, scope: str) -> list:
+        scope = (scope or "all").lower()
+        if scope == "pc":
+            return list(self._pc_games)
+        if scope == "rom":
+            return list(self._rom_games)
+        return list(self._pc_games) + list(self._rom_games)
+
+    def _job_busy(self) -> bool:
+        return bool(self._job.get("running"))
+
+    def job_status(self) -> dict:
+        """Snapshot postępu zadania (do paska w UI)."""
+        p = self._job
+        return {"running": p.get("running", False), "kind": p.get("kind", ""),
+                "phase": p.get("phase", ""), "done": p.get("done", 0),
+                "total": p.get("total", 0), "new": p.get("new", 0),
+                "cached": p.get("cached", 0), "failed": p.get("failed", 0),
+                "current": p.get("current", ""), "result": p.get("result")}
+
+    def job_stop(self) -> dict:
+        """Zatrzymuje bieżące zadanie (flaga anulowania — zadziała między grami)."""
+        self._job["cancel"] = True
+        return {"ok": True}
+
+    def _job_reset(self, kind: str, total: int) -> None:
+        self._job.update({"running": True, "kind": kind, "phase": "",
+                          "done": 0, "total": total, "new": 0, "cached": 0,
+                          "failed": 0, "current": "", "cancel": False,
+                          "result": None})
+
+    def job_download(self, scope: str = "all", icon: bool = True,
+                     steam: bool = True) -> dict:
+        """Pobiera KOMPLET grafik do cache dla gier z zakresu (scope: all/pc/rom).
+        icon = okładka/ikona (tryb ikon), steam = grid+hero+logo. Bez klucza SGDB
+        nic nie robi. Zwraca {started, total} — postęp przez job_status()."""
+        import threading
+        if self._job_busy():
+            return {"started": False, "reason": "zadanie już trwa"}
+        cfg = _load_config()
+        if not (cfg.get("api_keys", {}) or {}).get("sgdb_key"):
+            return {"started": False, "reason": "brak klucza SGDB", "total": 0}
+        games = self._games_for_scope(scope)
+        if not games:
+            return {"started": False, "reason": "brak gier (najpierw skan)", "total": 0}
+        self._job_reset("download", len(games))
+
+        def _worker(games_snapshot, cfg_snap):
+            for g in games_snapshot:
+                if self._job.get("cancel"):
+                    break
+                key = _game_key(g)
+                self._job["current"] = g.get("name", "")
+                q = self._title_override(key, cfg_snap)
+                # tryb ikon: okładka kwadratowa (ROM+grzbiet → portret)
+                if icon:
+                    try:
+                        # TANIA kontrola (glob) — wcześniej leciało pełne
+                        # dekodowanie miniatury (PIL + base64) tylko po to,
+                        # by sprawdzić istnienie, a wynik szedł do kosza.
+                        if art.has_cover(CACHE_DIR, key, "icon"):
+                            self._job["cached"] += 1
+                        else:
+                            pp = (g.get("source") == "rom"
+                                  and bool(cfg_snap.get("icon_platform_spine", False)))
+                            r = art.fetch_cover(cfg_snap, CACHE_DIR, key, g, "icon",
+                                                pp, query=q)
+                            self._job["new" if r.get("found") else "failed"] += 1
+                    except Exception:
+                        self._job["failed"] += 1
+                # tryb Steam: grid + hero + logo
+                if steam:
+                    try:
+                        r = art.prefetch_steam_art_for_game(cfg_snap, CACHE_DIR,
+                                                            key, g, query=q)
+                        for a in ("grid", "hero", "logo"):
+                            st = r.get(a)
+                            if st == "new":
+                                self._job["new"] += 1
+                            elif st == "cached":
+                                self._job["cached"] += 1
+                            elif st in ("fail", "none"):
+                                self._job["failed"] += 1
+                    except Exception:
+                        self._job["failed"] += 1
+                self._job["done"] += 1
+            self._job["running"] = False
+            self._job["current"] = ""
+            self._job["result"] = {"kind": "download",
+                                   "new": self._job["new"],
+                                   "cached": self._job["cached"],
+                                   "failed": self._job["failed"]}
+
+        threading.Thread(target=_worker, args=(games, cfg), daemon=True).start()
+        return {"started": True, "total": len(games)}
+
+    def job_create(self, scope: str = "all", icon: bool = True,
+                   steam: bool = False) -> dict:
+        """Tworzy WSZYSTKO dla gier z zakresu: icon = skróty .lnk/.url (LINKS/),
+        steam = wpisy w bibliotece Steam (shortcuts.vdf + grafiki + kolekcje).
+        Steam wymaga ZAMKNIĘTEGO Steama. Postęp przez job_status()."""
+        import threading
+        if self._job_busy():
+            return {"started": False, "reason": "zadanie już trwa"}
+        cfg = _load_config()
+        games = self._games_for_scope(scope)
+        if not games:
+            return {"started": False, "reason": "brak gier (najpierw skan)", "total": 0}
+        total = (len(games) if icon else 0) + (len(games) if steam else 0)
+        self._job_reset("create", max(1, total))
+
+        def _worker(games_snapshot, cfg_snap):
+            from pylinks.services import export as _exp
+            # COM (win32com) wymaga inicjalizacji NA TYM wątku — inaczej tworzenie
+            # skrótów .lnk rzuca „releasing IUnknown" i bywa zawodne.
+            try:
+                import pythoncom
+                pythoncom.CoInitialize()
+            except Exception:
+                pythoncom = None
+            summary = {"kind": "create"}
+            base = 0
+            if icon:
+                self._job["phase"] = "Skróty .lnk"
+
+                def _p(i, tot, name):
+                    self._job["done"] = base + i
+                    self._job["current"] = name
+                try:
+                    res = _exp.export_games(cfg_snap, games_snapshot, CACHE_DIR,
+                                            LINKS_DIR, progress=_p)
+                    summary["links"] = res
+                except Exception as ex:
+                    summary["links_error"] = str(ex)
+                base += len(games_snapshot)
+                self._job["done"] = base
+            if steam and not self._job.get("cancel"):
+                self._job["phase"] = "Biblioteka Steam"
+                from pylinks.services import steam_export as _se
+
+                def _ps(i, tot, name):
+                    self._job["done"] = base + i
+                    self._job["current"] = name
+                try:
+                    res = _se.export_to_steam(cfg_snap, games_snapshot, CACHE_DIR,
+                                              progress=_ps)
+                    summary["steam"] = res
+                except Exception as ex:
+                    summary["steam_error"] = str(ex)
+                base += len(games_snapshot)
+                self._job["done"] = base
+            if pythoncom is not None:
+                try:
+                    import gc
+                    gc.collect()               # zwolnij obiekty COM zanim zamkniemy apartament
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
+            self._job["running"] = False
+            self._job["current"] = ""
+            self._job["phase"] = ""
+            self._job["result"] = summary
+
+        threading.Thread(target=_worker, args=(games, cfg), daemon=True).start()
+        return {"started": True, "total": total, "steam": bool(steam)}
 
     def _save_steam_asset_sel(self, key: str, asset: str, url) -> None:
         """Zapis wyboru typu Steam w config.steam_art_by_key[key][asset]."""

@@ -88,9 +88,12 @@ class SgdbClient:
         except Exception:
             return []
 
-    def search_with_fallback(self, query: str) -> list[dict]:
-        """Skraca zapytanie, gdy autocomplete zawodzi (stare/rzadkie tytuły)."""
-        res = self.search(query)
+    def search_with_fallback(self, query: str, first=None) -> list[dict]:
+        """Skraca zapytanie, gdy autocomplete zawodzi (stare/rzadkie tytuły).
+
+        `first` = wynik JUŻ wykonanego wyszukiwania pełnej frazy; podaj go, gdy
+        wołający sam odpytał API — inaczej to samo zapytanie leci dwa razy."""
+        res = self.search(query) if first is None else first
         if res:
             return res
         seen = {query}
@@ -135,9 +138,12 @@ class SgdbClient:
     def grids_for_appid(self, appid, per_page: int = 8, dims: str = _PORTRAIT_DIMS) -> list[dict]:
         return self._grids(f"grids/steam/{appid}", per_page, dims)
 
-    def _icons(self, path: str) -> list[dict]:
-        """Endpoint ikon SGDB (kwadratowe ikony gry, często z przezroczystością)."""
-        d = fetch_api(f"{self.BASE}/{path}", hdrs=self._hdr())
+    def _icons(self, path: str, per_page: int = 50) -> list[dict]:
+        """Endpoint ikon/hero/logo SGDB. Dokłada limit+page (bez tego API zwraca
+        garstkę — hero/logo miały „jedno-dwa", mimo że na stronie jest więcej)."""
+        sep = "&" if "?" in path else "?"
+        url = f"{self.BASE}/{path}{sep}limit={max(1, min(50, per_page))}&page=0"
+        d = fetch_api(url, hdrs=self._hdr())
         if not d:
             return []
         try:
@@ -146,24 +152,26 @@ class SgdbClient:
         except Exception:
             return []
 
-    def icons_for_id(self, sgdb_id) -> list[dict]:
-        return self._icons(f"icons/game/{sgdb_id}")
+    def icons_for_id(self, sgdb_id, per_page: int = 50) -> list[dict]:
+        return self._icons(f"icons/game/{sgdb_id}", per_page)
 
-    def icons_for_appid(self, appid) -> list[dict]:
-        return self._icons(f"icons/steam/{appid}")
+    def icons_for_appid(self, appid, per_page: int = 50) -> list[dict]:
+        return self._icons(f"icons/steam/{appid}", per_page)
 
     # heroes (tło/banner) i logos (przezroczyste logo) — do trybu Steam
-    def heroes_for_id(self, sgdb_id) -> list[dict]:
-        return self._icons(f"heroes/game/{sgdb_id}?types=static,animated")
+    def heroes_for_id(self, sgdb_id, per_page: int = 50,
+                      types: str = "static,animated") -> list[dict]:
+        return self._icons(f"heroes/game/{sgdb_id}?types={types}", per_page)
 
-    def heroes_for_appid(self, appid) -> list[dict]:
-        return self._icons(f"heroes/steam/{appid}?types=static,animated")
+    def heroes_for_appid(self, appid, per_page: int = 50,
+                         types: str = "static,animated") -> list[dict]:
+        return self._icons(f"heroes/steam/{appid}?types={types}", per_page)
 
-    def logos_for_id(self, sgdb_id) -> list[dict]:
-        return self._icons(f"logos/game/{sgdb_id}")
+    def logos_for_id(self, sgdb_id, per_page: int = 50) -> list[dict]:
+        return self._icons(f"logos/game/{sgdb_id}", per_page)
 
-    def logos_for_appid(self, appid) -> list[dict]:
-        return self._icons(f"logos/steam/{appid}")
+    def logos_for_appid(self, appid, per_page: int = 50) -> list[dict]:
+        return self._icons(f"logos/steam/{appid}", per_page)
 
 
 # ── data-URI helpers ───────────────────────────────────────────────────────
@@ -241,18 +249,6 @@ def display_thumb_img(data: bytes, mode: str = "icon",
     return _fit_pad(im, size, size)
 
 
-def make_display_thumb(data: bytes, mode: str = "icon",
-                       fit: str = "pad", offset: float = 0.5,
-                       size: int = 256) -> bytes:
-    """PNG w docelowym kształcie (opakowanie display_thumb_img)."""
-    out = display_thumb_img(data, mode, fit, offset, size)
-    if out is None:
-        return data
-    buf = BytesIO()
-    out.save(buf, "PNG")
-    return buf.getvalue()
-
-
 def make_ico_bytes(square_img,
                    sizes=(256, 128, 64, 48, 32, 16)) -> bytes:
     """Kwadratowy obraz PIL → wielorozmiarowy .ico (maks 256, jak w oryginale)."""
@@ -276,19 +272,6 @@ def _covers_dir(cache_dir: Path, mode: str = "icon") -> Path:
     d = Path(cache_dir) / "covers" / _mode(mode)
     d.mkdir(parents=True, exist_ok=True)
     return d
-
-
-def cached_cover(cache_dir: Path, key: str, mode: str = "icon",
-                 fit: str = "pad", offset: float = 0.5) -> str | None:
-    """Zwraca data-URI PRZETWORZONEJ miniatury (kwadrat/portret) z cache."""
-    d = _covers_dir(cache_dir, mode)
-    safe = _safe_key(key)
-    for f in d.glob(safe + ".*"):
-        try:
-            return _to_data_uri(make_display_thumb(f.read_bytes(), mode, fit, offset))
-        except Exception:
-            return None
-    return None
 
 
 def raw_cover(cache_dir: Path, key: str, mode: str = "icon") -> str | None:
@@ -389,23 +372,70 @@ def parse_sgdb_ref(text: str) -> int | None:
     return None
 
 
+def _norm_title(s: str) -> str:
+    """Tytuł do porównań: małe litery, tylko alfanumeryczne (bez spacji/interpunkcji)."""
+    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
+
+def _pick_best_id(results: list[dict], wanted: str):
+    """Z wyników autocomplete wybiera ten o DOKŁADNIE tym tytule (bez względu na
+    wielkość liter i interpunkcję); dopiero w ostateczności pierwszy wynik.
+
+    Bez tego krótkie/nietypowe tytuły były błędne — np. „D" łapało „D.I.P.R.I.P.".
+    """
+    if not results:
+        return None
+    w_raw = (wanted or "").strip().lower()
+    for r in results:                      # 1) dokładny (surowy, ignorując wielkość)
+        if r.get("id") and (r.get("name") or "").strip().lower() == w_raw:
+            return r.get("id")
+    w_norm = _norm_title(wanted)
+    if w_norm:
+        for r in results:                  # 2) dokładny po normalizacji (alfanum.)
+            if r.get("id") and _norm_title(r.get("name")) == w_norm:
+                return r.get("id")
+        # 3) tytuł bazowy (część przed ': ' / ' - ') == szukany. Trafia np.
+        #    „D" → „D: The Game" (SGDB nie ma gołego „D"), zamiast „D.I.P.R.I.P.".
+        base_hits = []
+        for r in results:
+            if not r.get("id"):
+                continue
+            base = re.split(r"\s*:\s*|\s+-\s+", r.get("name") or "", maxsplit=1)[0]
+            if _norm_title(base) == w_norm:
+                base_hits.append(r)
+        if base_hits:
+            base_hits.sort(key=lambda r: len(r.get("name") or ""))
+            return base_hits[0].get("id")
+    return results[0].get("id")            # 4) fallback: pierwszy
+
+
 def _resolve_ref(client: SgdbClient, game: dict, query: str):
     """Ustala co odpytać: ('appid', id) lub ('game', sgdb_id) albo None.
 
     query pusty → appid gry, inaczej szukanie po nazwie.
     query = URL/ID SGDB → to id. query = tekst → szukanie po frazie.
+    Wybór wyniku preferuje DOKŁADNE dopasowanie tytułu (nie pierwszy z brzegu).
     """
     ref = parse_sgdb_ref(query)
     if ref is not None:
         return ("game", ref)
+
+    def _find(name: str):
+        # szersza pula (25) zwiększa szansę na trafienie dokładnego tytułu;
+        # gdy autocomplete pusty → skracanie zapytania (stare/rzadkie tytuły).
+        # first=res, żeby fallback NIE powtarzał tego samego zapytania do API.
+        res = client.search(name, max_results=25)
+        if not res:
+            res = client.search_with_fallback(name, first=res)
+        rid = _pick_best_id(res, name)
+        return ("game", rid) if rid else None
+
     if query.strip():
-        res = client.search_with_fallback(query.strip())
-        return ("game", res[0].get("id")) if res else None
+        return _find(query.strip())
     appid = game.get("appid")
     if appid:
         return ("appid", appid)
-    res = client.search_with_fallback(game.get("name", ""))
-    return ("game", res[0].get("id")) if res else None
+    return _find(game.get("name", ""))
 
 
 def candidates_for_game(cfg: dict, game: dict, query: str = "",
@@ -503,18 +533,109 @@ def _steam_asset_name(key: str, asset: str) -> str:
     return safe if asset == "grid" else f"{safe}__{asset}"
 
 
-def cached_steam_asset(cache_dir: Path, key: str, asset: str) -> str | None:
+def _has_steam_asset(cache_dir: Path, key: str, asset: str) -> bool:
+    d = _covers_dir(cache_dir, "steam")
+    return any(True for _ in d.glob(_steam_asset_name(key, asset) + ".*"))
+
+
+def cached_steam_asset_thumb(cache_dir: Path, key: str, asset: str,
+                             box: int = 320) -> str | None:
+    """MINIATURA zapisanej grafiki Steam (data-URI) — do podglądu w UI.
+
+    Nigdy nie zwracamy pełnego pliku: hero bywa animowanym webp na 45 MB, a most
+    pywebview przesyła to jako base64 (~59 MB) i okno zamiera. PNG z pierwszej
+    klatki, z zachowaniem przezroczystości (logo)."""
     d = _covers_dir(cache_dir, "steam")
     for f in d.glob(_steam_asset_name(key, asset) + ".*"):
         try:
-            return _to_data_uri(f.read_bytes())
+            from io import BytesIO
+            im = Image.open(f)
+            im.seek(0)                      # animowany webp/gif → pierwsza klatka
+            im = im.convert("RGBA")
+            im.thumbnail((box, box), Image.LANCZOS)
+            buf = BytesIO()
+            im.save(buf, "PNG")
+            return _to_data_uri(buf.getvalue())
         except Exception:
-            return None
+            continue                        # uszkodzony plik → spróbuj następnego
     return None
 
 
+def has_cover(cache_dir: Path, key: str, mode: str = "icon") -> bool:
+    """TANIA kontrola obecności okładki w cache — sam glob, bez czytania pliku,
+    PIL-a i base64 (wcześniej robiło to pełne dekodowanie miniatury)."""
+    d = _covers_dir(cache_dir, mode)
+    return any(True for _ in d.glob(_safe_key(key) + ".*"))
+
+
+_HERO_TARGET_W = 1920          # kanoniczna szerokość tła w bibliotece Steam
+
+
+def _prefer_hero(items: list) -> list:
+    """Sortuje tła: najpierw NIEanimowane, potem najbliżej 1920 px szerokości.
+
+    Bez tego prefetch brał „pierwsze z brzegu" — często animowane 3840 px webp
+    ważące kilkadziesiąt MB, choć Steam wyświetla statyczne 1920×620."""
+    def _rank(a):
+        anim = 1 if str(a.get("type") or "").lower() == "animated" else 0
+        if not anim:                          # webp/gif bywa animowany bez pola type
+            u = str(a.get("url") or "").lower()
+            anim = 1 if u.endswith(".webp") or u.endswith(".gif") else 0
+        w = int(a.get("width") or 0)
+        return (anim, abs(w - _HERO_TARGET_W) if w else 10 ** 6)
+    return sorted(items, key=_rank)
+
+
+def prefetch_steam_art_for_game(cfg: dict, cache_dir: Path, key: str, game: dict,
+                                query: str = "") -> dict:
+    """Dociąga KOMPLET grafik Steam (grid + hero + logo) danej gry do cache —
+    pierwszy (najlepszy) wariant z SGDB. Pomija to, co już jest w cache.
+    Zwraca {"ok", "grid","hero","logo": 'cached'|'new'|'none'|'fail'}."""
+    out = {"grid": "none", "hero": "none", "logo": "none"}
+    # szybka ścieżka: wszystko już jest → bez zapytań do sieci
+    need = [a for a in _STEAM_ASSETS if not _has_steam_asset(cache_dir, key, a)]
+    for a in _STEAM_ASSETS:
+        if a not in need:
+            out[a] = "cached"
+    if not need:
+        return {"ok": True, **out}
+    client = SgdbClient((cfg.get("api_keys", {}) or {}).get("sgdb_key", ""))
+    if not client.ok:
+        return {"ok": False, "reason": "brak klucza SGDB", **out}
+    ref = _resolve_ref(client, game, query)
+    if not ref:
+        return {"ok": False, "reason": "brak dopasowania SGDB", **out}
+    kind_id, val = ref
+
+    def _list(asset):
+        if asset == "grid":
+            return (client.grids_for_appid(val, per_page=8, dims=_STEAM_DIMS)
+                    if kind_id == "appid" else
+                    client.grids_for_id(val, per_page=8, dims=_STEAM_DIMS))
+        if asset == "hero":
+            # TYLKO statyczne: Steam i tak nie animuje tła w bibliotece, a
+            # animowane webp potrafią mieć 45 MB (cache puchł do ~2 GB).
+            return (client.heroes_for_appid(val, per_page=8, types="static")
+                    if kind_id == "appid" else
+                    client.heroes_for_id(val, per_page=8, types="static"))
+        return (client.logos_for_appid(val, per_page=8) if kind_id == "appid"
+                else client.logos_for_id(val, per_page=8))
+
+    for asset in need:
+        items = _list(asset) or []
+        if asset == "hero":
+            items = _prefer_hero(items)
+        url = items[0].get("url") if items else None
+        if not url:
+            out[asset] = "none"
+            continue
+        r = save_steam_asset(cache_dir, key, asset, url)
+        out[asset] = "new" if r.get("found") else "fail"
+    return {"ok": True, **out}
+
+
 def steam_art_options(cfg: dict, game: dict, query: str = "",
-                      limit: int = 20) -> dict:
+                      limit: int = 40) -> dict:
     """Wszystkie warianty grafik Steam naraz: grid (okładka), hero (tło), logo.
 
     Zwraca {"ok", "sgdb_id", "grid":[...], "hero":[...], "logo":[...]}.
@@ -531,12 +652,12 @@ def steam_art_options(cfg: dict, game: dict, query: str = "",
     kind_id, val = ref
     if kind_id == "appid":
         grids = client.grids_for_appid(val, per_page=limit, dims=_STEAM_DIMS)
-        heroes = client.heroes_for_appid(val)
-        logos = client.logos_for_appid(val)
+        heroes = client.heroes_for_appid(val, per_page=limit)
+        logos = client.logos_for_appid(val, per_page=limit)
     else:
         grids = client.grids_for_id(val, per_page=limit, dims=_STEAM_DIMS)
-        heroes = client.heroes_for_id(val)
-        logos = client.logos_for_id(val)
+        heroes = client.heroes_for_id(val, per_page=limit)
+        logos = client.logos_for_id(val, per_page=limit)
     return {
         "ok": True,
         "sgdb_id": val if kind_id == "game" else None,

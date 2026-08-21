@@ -41,12 +41,32 @@ python main.py --debug    # + DevTools (prawy-klik → Inspect)
 
 Wymaga **WebView2** (Windows) — instalowany z Edge / dostępny w systemie.
 
+## Budowa przenośnego .exe
+
+```powershell
+powershell -ExecutionPolicy Bypass -File build.ps1
+```
+
+albo ręcznie:
+
+```bash
+pip install pyinstaller pywebview Pillow pywin32
+pyinstaller --noconfirm --clean pylinks_web.spec
+```
+
+Wynik: **`dist\PyLinksWeb.exe`** (~30 MB, onefile). Aplikacja jest **portable** —
+`config.json`, `Cache/` i `LINKS/` powstają OBOK exe (nie w AppData). Frontend
+`web/` jest wpakowany do bundla (odczyt z `sys._MEIPASS`), a DLL-e WebView2 +
+pythonnet dokłada spec przez `collect_all("webview")`. Docelowy komputer musi
+mieć zainstalowany **WebView2 Runtime** (standard na Windows 11).
+
+Diagnostyka startu: uruchom `PyLinksWeb.exe --debug` (albo ustaw `PLW_DEBUG=1`) —
+logi pywebview lecą na stderr; błędy startu trafiają do `startup.log` obok exe.
+
 ## Status
 
-**Faza 0** — szkielet: działający stos pywebview + most do silnika,
-podgląd istniejących skrótów z `LINKS/<platforma>/`.
-
-Kolejne fazy:
-- **Faza 1** — skanowanie źródeł, siatka gier, wybór ikon/grafik.
-- **Faza 2** — dialogi (ustawienia, kadrowanie, kolekcje, grzbiety).
-- **Faza 3** — pakowanie (PyInstaller + WebView2).
+**Fazy 0–3 ukończone.** Skan PC/ROM, okładki (SGDB/IGDB/TGDB/Libretro), wybór i
+kadrowanie ikon, grzbiety platform (szerokość + wariant/rozmiar logo), eksport
+skrótów `.lnk`/`.url` oraz do biblioteki Steam (shortcuts.vdf + grafiki +
+kolekcje), kolekcje serii, szyfrowanie kluczy (TPM→DPAPI), pakowanie do
+`PyLinksWeb.exe` (PyInstaller). 

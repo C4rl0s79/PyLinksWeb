@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import re
+from functools import lru_cache
 from pathlib import Path
 
 try:
@@ -32,7 +33,7 @@ PLATFORM_SPINE_ALIAS: dict = {
     "XBOXONE": "XONE", "XBONE": "XONE",
     "VITA": "PSVITA",
     "DS": "NDS",
-    "NAOMI2": "DC", "NAOMI": "DC",
+    # NAOMI / NAOMI 2 mają WŁASNE logotypy (nie Dreamcast) — bez aliasu do DC.
 }
 
 
@@ -42,24 +43,69 @@ def spine_canon_key(key: str) -> str:
     return PLATFORM_SPINE_ALIAS.get(k, k)
 
 
-def platform_logo_uri(logo_dir: str, system: str) -> str | None:
-    """Logo platformy jako data-URI (własny klucz → alias bazowy)."""
+@lru_cache(maxsize=256)
+def _canon_from_presets(system: str) -> str:
+    """Rozwiązuje nazwę systemu (np. „Sega - Saturn", „Dreamcast", „3DO Interactive
+    Multiplayer") na krótki klucz presetu (SATURN/DC/3DO) — po dir_names/display/name.
+    Dzięki temu grzbiet znajduje logo niezależnie od tego, jak nazwano system.
+    Cache: wynik zależy tylko od nazwy, a skan presetów leciał przy każdej grze."""
+    try:
+        from pylinks.roms.presets import ROM_SYSTEM_PRESETS
+    except Exception:
+        return ""
+    def _n(s):
+        return re.sub(r"[^a-z0-9]+", "", str(s or "").lower())
+    want = _n(system)
+    if not want:
+        return ""
+    for p in ROM_SYSTEM_PRESETS:
+        cands = [p.get("name", ""), p.get("display", "")] + list(p.get("dir_names", []))
+        if any(_n(c) == want for c in cands):
+            return str(p.get("name", ""))
+    return ""
+
+
+@lru_cache(maxsize=256)
+def _logo_key_candidates(system: str) -> tuple:
+    """Uporządkowana lista kluczy plików logo do sprawdzenia dla danego systemu."""
+    orig = re.sub(r"[\s._\-]+", "", str(system or "")).upper()
+    keys = [orig, spine_canon_key(system)]
+    preset = _canon_from_presets(system)
+    if preset:
+        keys.append(re.sub(r"[\s._\-]+", "", preset).upper())
+        keys.append(spine_canon_key(preset))
+    # unikalne, zachowując kolejność (tuple — hashowalne dla lru_cache)
+    seen, out = set(), []
+    for k in keys:
+        if k and k not in seen:
+            seen.add(k); out.append(k)
+    return tuple(out)
+
+
+def _find_logo_file(logo_dir: str, system: str) -> "Path | None":
+    """Ścieżka pliku logo dla systemu (pierwszy pasujący kandydat)."""
     if not logo_dir or not system:
         return None
-    orig = re.sub(r"[\s._\-]+", "", str(system)).upper()
-    canon = spine_canon_key(system)
     base = Path(logo_dir)
-    for key in (orig, canon):
+    for key in _logo_key_candidates(system):
         for ext in (".png", ".webp"):
             p = base / f"{key}{ext}"
             if p.is_file():
-                try:
-                    data = p.read_bytes()
-                    mime = "image/webp" if ext == ".webp" else "image/png"
-                    return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
-                except Exception:
-                    return None
+                return p
     return None
+
+
+def platform_logo_uri(logo_dir: str, system: str) -> str | None:
+    """Logo platformy jako data-URI (własny klucz → alias bazowy)."""
+    p = _find_logo_file(logo_dir, system)
+    if p is None:
+        return None
+    try:
+        data = p.read_bytes()
+        mime = "image/webp" if p.suffix.lower() == ".webp" else "image/png"
+        return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+    except Exception:
+        return None
 
 
 # ── PIL: pieczenie grzbietu do .ico (eksport) ──────────────────────────────
@@ -72,18 +118,41 @@ def _hex_rgba(hexc: str, alpha: int = 255):
 def _platform_logo_pil(logo_dir: str, system: str):
     if not _PIL or not logo_dir:
         return None
-    orig = re.sub(r"[\s._\-]+", "", str(system)).upper()
-    canon = spine_canon_key(system)
-    base = Path(logo_dir)
-    for key in (orig, canon):
-        for ext in (".png", ".webp"):
-            p = base / f"{key}{ext}"
-            if p.is_file():
-                try:
-                    return Image.open(p).convert("RGBA")
-                except Exception:
-                    return None
-    return None
+    p = _find_logo_file(logo_dir, system)
+    if p is None:
+        return None
+    try:
+        return Image.open(p).convert("RGBA")
+    except Exception:
+        return None
+
+
+# Gotowe logo (wczytane + z poprawionym kontrastem) per plik. Przy eksporcie
+# setek ROM-ów ten sam PNG był otwierany i analizowany pikselowo raz na grę.
+# Klucz zawiera mtime, więc podmiana wariantu w edytorze od razu unieważnia wpis.
+_LOGO_READY: dict = {}
+
+
+def _spine_logo_ready(logo_dir: str, system: str):
+    """Logo gotowe do nałożenia na grzbiet (z cache). Nie mutujemy zwracanego
+    obrazu — rotate()/resize() u wołających tworzą nowe obiekty."""
+    p = _find_logo_file(logo_dir, system)
+    if p is None:
+        return None
+    try:
+        ck = (str(p), p.stat().st_mtime_ns)
+    except Exception:
+        ck = (str(p), 0)
+    if ck in _LOGO_READY:
+        return _LOGO_READY[ck]
+    img = _platform_logo_pil(logo_dir, system)
+    if img is None:
+        return None
+    img = _ensure_logo_contrast(img)
+    if len(_LOGO_READY) > 64:
+        _LOGO_READY.clear()
+    _LOGO_READY[ck] = img
+    return img
 
 
 def _ensure_logo_contrast(logo):
@@ -109,23 +178,15 @@ def _ensure_logo_contrast(logo):
         return logo
 
 
-def _cover(im, tw, th):
-    """Skaluje, by wypełnić (tw,th), i przycina do środka (jak object-fit:cover)."""
-    scale = max(tw / im.width, th / im.height)
-    nw, nh = max(1, round(im.width * scale)), max(1, round(im.height * scale))
-    src = im.resize((nw, nh), Image.LANCZOS)
-    left, top = (nw - tw) // 2, (nh - th) // 2
-    return src.crop((left, top, left + tw, top + th))
-
-
 def add_platform_spine(img, system: str, side: str = "left",
-                       frac: float = 0.22, logo_dir: str = ""):
+                       frac: float = 0.22, logo_dir: str = "",
+                       logo_scale: float = 0.85):
     """Kwadratowa ikona = STAŁY grzbiet (frac szerokości) + grafika w CAŁOŚCI
     (contain, proporcjonalnie — bez ucinania góry/dołu, bez zniekształceń).
     Kwadratowa ikona też OK (zwężona, wyśrodkowana). Bez logo/PIL — zwraca img."""
     if not _PIL or not system:
         return img
-    logo = _platform_logo_pil(logo_dir, system)
+    logo = _spine_logo_ready(logo_dir, system)   # z cache (wczytane + kontrast)
     if logo is None:
         return img
     try:
@@ -138,7 +199,6 @@ def add_platform_spine(img, system: str, side: str = "left",
         base = base.resize((max(1, round(W0 * r)), max(1, round(H0 * r))), Image.LANCZOS)
         W, H = base.size
         S = max(W, H)
-        logo = _ensure_logo_contrast(logo)
 
         sw = max(14, int(round(S * frac)))    # STAŁY grzbiet (nie zależy od plakatu)
 
@@ -153,9 +213,12 @@ def add_platform_spine(img, system: str, side: str = "left",
             d.line([(sw - 2, 0), (sw - 2, S)], fill=_hex_rgba("#ffffff", 55))
 
         lg = logo.rotate(90 if side == "left" else -90, expand=True)
-        scale = max(1, int(sw * 0.84)) / max(1, lg.width)
-        if lg.height * scale > S * 0.94:
-            scale = (S * 0.94) / max(1, lg.height)
+        ls = 0.85 if not logo_scale else max(0.30, min(1.0, float(logo_scale)))
+        wfill = min(0.98, ls)            # % szerokości grzbietu zajętej przez logo
+        hcap = min(0.98, ls * 1.10 + 0.03)  # dopuszczalna długość wzdłuż grzbietu
+        scale = max(1, int(sw * wfill)) / max(1, lg.width)
+        if lg.height * scale > S * hcap:
+            scale = (S * hcap) / max(1, lg.height)
         lg = lg.resize((max(1, int(lg.width * scale)), max(1, int(lg.height * scale))),
                        Image.LANCZOS)
         spine.alpha_composite(lg, ((sw - lg.width) // 2, (S - lg.height) // 2))

@@ -1,7 +1,6 @@
 """core.matching — heurystyki dopasowania tytułów.
 
-Ownership: podobieństwo bigramowe (name_similarity) i decyzja o pytaniu
-użytkownika przy niejednoznacznym wyniku (needs_disambiguation).
+Ownership: podobieństwo bigramowe (name_similarity).
 
 Behavior preserved from legacy single-file module.
 """
@@ -9,8 +8,6 @@ Behavior preserved from legacy single-file module.
 from __future__ import annotations
 
 import re
-
-from pylinks.constants import MATCH_THRESHOLD
 
 
 def name_similarity(a: str, b: str) -> float:
@@ -23,14 +20,3 @@ def name_similarity(a: str, b: str) -> float:
     if not ba or not bb:
         return 0.0
     return 2 * len(ba & bb) / (len(ba) + len(bb))
-
-
-def needs_disambiguation(query: str, results: list) -> bool:
-    if not results:
-        return False
-    top_score = name_similarity(query, results[0].get("name", ""))
-    if top_score < MATCH_THRESHOLD:
-        return True
-    if len(results) > 1 and name_similarity(query, results[1].get("name", "")) > 0.70:
-        return True
-    return False

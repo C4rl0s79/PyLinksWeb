@@ -128,7 +128,76 @@ async function runScan(){
   }
   await scanRomsUI();   // skan ROM-ów
   checkOrphans();       // monit o osieroconych skrótach
+  startPrefetch();      // dociąganie kompletu grafik Steam (grid+hero+logo) w tle
 }
+
+// ── zadania w tle (pobierz/stwórz wszystko) + pasek postępu ──────────────────
+let PF_TIMER = null;
+const SCOPE_LABEL = {all:"wszystko", pc:"PC", rom:"ROM-y"};
+
+// auto po skanie: dociągnij grafiki Steam (grid+hero+logo) dla wszystkich
+async function startPrefetch(){
+  await startJob("job_download", {scope:"all", icon:false, steam:true},
+                 "Pobieram grafiki Steam", true);   // silent = bez komunikatów
+}
+
+// uruchamia zadanie i pokazuje pasek; label = tekst wiodący. Zwraca reason||"".
+async function startJob(method, args, label, silent){
+  let r;
+  try{ r = await api(method, args.scope, args.icon, args.steam); }
+  catch(e){ if (!silent) toast("Błąd: " + e.message); return "error"; }
+  if (!r || !r.started){
+    const reason = (r && r.reason) || "nie uruchomiono";
+    if (!silent) toast("Nie uruchomiono: " + reason);
+    return reason;
+  }
+  el("pfBar").hidden = false;
+  el("pfFill").style.width = "0%";
+  el("pfTxt").textContent = label + "…";
+  PF_LABEL = label;
+  if (PF_TIMER) clearInterval(PF_TIMER);
+  PF_TIMER = setInterval(pollJob, 700);
+  return "";
+}
+let PF_LABEL = "";
+async function pollJob(){
+  let s;
+  try{ s = await api("job_status"); }catch(e){ return; }
+  const pct = s.total ? Math.round(100 * s.done / s.total) : 0;
+  el("pfFill").style.width = pct + "%";
+  const ph = s.phase ? ` [${s.phase}]` : "";
+  const cur = s.current ? " • " + s.current : "";
+  el("pfTxt").textContent = `${PF_LABEL}${ph}: ${s.done}/${s.total}${cur}`;
+  if (!s.running){
+    clearInterval(PF_TIMER); PF_TIMER = null;
+    finishJob(s);
+  }
+}
+function finishJob(s){
+  const res = s.result || {};
+  let msg = `${PF_LABEL} — gotowe: ${s.done}/${s.total}`;
+  if (res.kind === "download") msg += ` (nowe ${s.new}, w cache ${s.cached})`;
+  if (res.kind === "create"){
+    const l = res.links || {}, st = res.steam || {};
+    const parts = [];
+    if (res.links){
+      const nf = Array.isArray(l.failed) ? l.failed.length : (l.failed || 0);
+      parts.push(`skróty: ${l.created ?? "?"}` + (nf ? `, błędy ${nf}` : ""));
+    }
+    if (res.links_error) parts.push(`błąd skrótów: ${res.links_error}`);
+    if (res.steam){
+      if (st.ok === false) parts.push(`Steam: ${st.reason || "błąd"}`);
+      else parts.push(`Steam: +${st.added ?? "?"} (grafiki ${st.art ?? 0})`);
+    }
+    if (res.steam_error) parts.push(`błąd Steam: ${res.steam_error}`);
+    if (parts.length) msg += " — " + parts.join(", ");
+    loadPlatforms();
+  }
+  el("pfTxt").textContent = msg;
+  setTimeout(() => { el("pfBar").hidden = true; }, 3500);
+}
+function toast(t){ el("pfBar").hidden = false; el("pfTxt").textContent = t;
+  el("pfFill").style.width = "0%"; setTimeout(()=>{ el("pfBar").hidden = true; }, 3000); }
 
 // osierocone skróty (gra już nie istnieje) → propozycja usunięcia
 async function checkOrphans(){
@@ -148,7 +217,7 @@ async function checkOrphans(){
 
 // ── ROM-y ────────────────────────────────────────────────────────────────
 let ROM_GAMES = [];
-let SPINE = {enabled:false, side:"left"};
+let SPINE = {enabled:false, side:"left", frac:0.22};
 let SYS_LOGO = {};      // system → logo (data-URI)
 async function scanRomsUI(){
   const box = el("romSystems");
@@ -200,6 +269,7 @@ function addSpine(cardEl, logoUri, side){
   const thumb = cardEl.querySelector(".thumb");
   if (!thumb) return;
   thumb.classList.add(side === "right" ? "spine-right" : "spine-left");
+  thumb.style.setProperty("--spine-w", Math.round((SPINE.frac||0.22)*100) + "%");
   const sp = document.createElement("div");
   sp.className = "spine";
   const img = document.createElement("img"); img.src = logoUri; img.alt = "";
@@ -371,16 +441,6 @@ function showCtx(x, y, game){
 }
 function hideCtx(){ el("ctxMenu").hidden = true; CTX_GAME = null; }
 
-async function resetCover(game){
-  const key = game.key;
-  const thumb = document.querySelector(`.card[data-key="${cssEsc(key)}"] .thumb`);
-  if (thumb){ thumb.classList.add("loading"); const im=thumb.querySelector("img"); if(im) im.remove(); }
-  try{
-    const r = await api("reset_cover", key, MODE);
-    setCover(key, r.found ? r.data_uri : null, r.fit, r.offset);
-  }catch(e){ if (thumb) thumb.classList.remove("loading"); }
-}
-
 el("ctxMenu").addEventListener("click", (e) => {
   const act = e.target.dataset.act;
   const g = CTX_GAME;
@@ -464,7 +524,54 @@ function applyCropPos(){
 })();
 
 el("cropClose").onclick = closeCropWindow;
-el("cropModal").addEventListener("click", (e) => { if (e.target === el("cropModal")) closeCropWindow(); });
+// zamyka modal klikiem w tło, ale TYLKO gdy mousedown też był na tle
+// (żeby resize/przeciąganie kończące się poza oknem nie zamykało go)
+function bindBackdropClose(id, closeFn){
+  const m = el(id); if (!m) return;
+  let downBg = false;
+  m.addEventListener("mousedown", (e) => { downBg = (e.target === m); });
+  m.addEventListener("click", (e) => { if (e.target === m && downBg) closeFn(); });
+}
+bindBackdropClose("cropModal", closeCropWindow);
+
+// przeciąganie okna modala za nagłówek (transform translate — nie psuje resize);
+// pozycja zapamiętywana w localStorage, z lekkim ograniczeniem do ekranu
+function makeModalDraggable(modalId, storeKey){
+  const modal = el(modalId); if (!modal) return;
+  const box = modal.querySelector(".modal-box");
+  const head = modal.querySelector(".modal-head");
+  if (!box || !head) return;
+  head.style.cursor = "move";
+  let dx = 0, dy = 0;
+  try{ const s = JSON.parse(localStorage.getItem(storeKey) || "null");
+       if (s){ dx = s.dx||0; dy = s.dy||0; } }catch(_){}
+  const clamp = () => {
+    const mx = Math.max(120, innerWidth * 0.45), my = Math.max(120, innerHeight * 0.42);
+    dx = Math.max(-mx, Math.min(mx, dx)); dy = Math.max(-my, Math.min(my, dy));
+  };
+  const apply = () => { clamp(); box.style.transform = `translate(${dx}px,${dy}px)`; };
+  apply();
+  let sx, sy, sdx, sdy, drag = false;
+  head.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest("button,input,select,textarea,a,.pk-suggest")) return;
+    drag = true; sx = e.clientX; sy = e.clientY; sdx = dx; sdy = dy;
+    document.body.style.userSelect = "none"; e.preventDefault();
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!drag) return;
+    dx = sdx + (e.clientX - sx); dy = sdy + (e.clientY - sy); apply();
+  });
+  document.addEventListener("mouseup", () => {
+    if (!drag) return;
+    drag = false; document.body.style.userSelect = "";
+    try{ localStorage.setItem(storeKey, JSON.stringify({dx, dy})); }catch(_){}
+  });
+}
+["picker:pk_modal_pos", "cropModal:crop_modal_pos", "collModal:coll_modal_pos",
+ "setModal:set_modal_pos", "logoModal:logo_modal_pos"].forEach(s => {
+  const [id, key] = s.split(":"); makeModalDraggable(id, key);
+});
 el("cropSave").onclick = async () => {
   if (!CROP_W) return;
   try{
@@ -562,6 +669,7 @@ function renderSteamOptions(opt){
   }
   box.innerHTML = "";
   const cur = opt.current || {};
+  renderSteamCurrent(box, opt.cached || {});
   pkProgReset(STEAM_SECTIONS.reduce((n,[a]) => n + ((opt[a]||[]).length), 0));
   for (const [asset, label] of STEAM_SECTIONS){
     const list = opt[asset] || [];
@@ -588,6 +696,44 @@ function renderSteamOptions(opt){
     sec.appendChild(row);
     box.appendChild(sec);
   }
+  // przewiń wybrany wariant do widoku w każdym wierszu
+  box.querySelectorAll(".pk-row .pk-item.chosen").forEach(it => {
+    try{ it.scrollIntoView({inline:"center", block:"nearest"}); }catch(_){}
+  });
+}
+
+// pasek „Wybrane" — pokazuje aktualnie zapisane grafiki (grid/tło/logo) z cache
+function renderSteamCurrent(box, cached){
+  const strip = document.createElement("div");
+  strip.className = "pk-current";
+  strip.id = "pkCurrent";
+  strip.innerHTML = `<div class="pk-cur-h">Wybrane grafiki (trafią do Steam)</div>`;
+  const wrap = document.createElement("div"); wrap.className = "pk-cur-row";
+  for (const [asset, label] of STEAM_SECTIONS){
+    const slot = document.createElement("div");
+    slot.className = "pk-cur-slot"; slot.dataset.slot = asset;
+    const uri = cached[asset];
+    slot.innerHTML = `<div class="pk-cur-lbl">${label}</div>`
+      + (uri ? `<img class="pk-cur-img pk-cur-${asset}" src="${uri}" alt="">`
+             : `<div class="pk-cur-none">— brak —</div>`);
+    wrap.appendChild(slot);
+  }
+  strip.appendChild(wrap);
+  box.appendChild(strip);
+}
+function updateSteamCurrent(asset, dataUri){
+  const slot = document.querySelector(`#pkCurrent .pk-cur-slot[data-slot="${asset}"]`);
+  if (!slot) return;
+  const lbl = slot.querySelector(".pk-cur-lbl");
+  slot.innerHTML = ""; if (lbl) slot.appendChild(lbl);
+  if (dataUri){
+    const img = document.createElement("img");
+    img.className = "pk-cur-img pk-cur-" + asset; img.src = dataUri; img.alt = "";
+    slot.appendChild(img);
+  }else{
+    const d = document.createElement("div"); d.className = "pk-cur-none";
+    d.textContent = "— brak —"; slot.appendChild(d);
+  }
 }
 
 async function chooseSteamAsset(asset, url, itEl){
@@ -600,6 +746,7 @@ async function chooseSteamAsset(asset, url, itEl){
     itEl.classList.remove("busy");
     if (r.found){
       itEl.classList.add("chosen");
+      updateSteamCurrent(asset, r.data_uri);   // odśwież pasek „Wybrane"
       // okładka (grid) jest tym, co widać w karcie — podmień
       if (asset === "grid"){
         const thumb = document.querySelector(`.card[data-key="${cssEsc(PK_GAME.key)}"] .thumb`);
@@ -764,15 +911,61 @@ el("pkQuery").addEventListener("keydown", (e) => {
   }
   else if (e.key === "Escape" && open){ e.stopPropagation(); hideSuggest(); }
 });
-el("picker").addEventListener("click", (e) => {
-  if (e.target === el("picker")) closePicker();   // klik w tło zamyka
-});
+bindBackdropClose("picker", closePicker);
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !el("picker").hidden && el("pkSuggest").hidden) closePicker();
 });
 
 // ── zdarzenia ──────────────────────────────────────────────────────────────
 el("btnScan").onclick = runScan;
+el("pfStop").onclick = async () => {
+  try{ await api("job_stop"); }catch(e){}
+  el("pfTxt").textContent = "Zatrzymywanie…";
+};
+
+// ── Pobierz wszystko / Stwórz wszystko (globalnie lub per grupa) ──────────────
+async function doGetAll(scope){
+  await startJob("job_download", {scope, icon:true, steam:true},
+                 `Pobieram grafiki (${SCOPE_LABEL[scope]||scope})`, false);
+}
+async function doMakeAll(scope){
+  let running = false;
+  try{ running = (await api("steam_running")).running; }catch(_){}
+  let m = `Utworzyć WSZYSTKO dla: ${SCOPE_LABEL[scope]||scope}?\n`
+        + `• skróty .lnk/.url w LINKS/\n`
+        + `• wpisy w bibliotece Steam (grafiki + kolekcje per platforma)`;
+  if (running) m += `\n\n⚠ Steam JEST URUCHOMIONY — zamknij go CAŁKOWICIE, inaczej `
+                  + `zmiany w bibliotece Steam zostaną nadpisane.`;
+  if (!confirm(m)) return;
+  await startJob("job_create", {scope, icon:true, steam:true},
+                 `Tworzę wszystko (${SCOPE_LABEL[scope]||scope})`);
+}
+el("btnGetAll").onclick  = () => doGetAll("all");
+el("btnMakeAll").onclick = () => doMakeAll("all");
+
+// prawy klik na grupie PC/ROM → menu z tymi samymi opcjami dla danej grupy
+let GRP_SCOPE = "all";
+document.querySelector(".sidebar").addEventListener("contextmenu", (e) => {
+  const grp = e.target.closest(".side-group[data-scope]");
+  if (!grp) return;
+  e.preventDefault();
+  GRP_SCOPE = grp.dataset.scope;
+  const m = el("grpMenu");
+  el("grpMenuHead").textContent = GRP_SCOPE === "pc" ? "Grupa: PC" : "Grupa: ROM-y";
+  m.hidden = false;
+  const w = m.offsetWidth || 240, h = m.offsetHeight || 90;
+  m.style.left = Math.min(e.clientX, innerWidth - w - 8) + "px";
+  m.style.top  = Math.min(e.clientY, innerHeight - h - 8) + "px";
+});
+el("grpMenu").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-gact]"); if (!b) return;
+  el("grpMenu").hidden = true;
+  if (b.dataset.gact === "get") doGetAll(GRP_SCOPE);
+  else doMakeAll(GRP_SCOPE);
+});
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#grpMenu")) el("grpMenu").hidden = true;
+});
 el("btnPing").onclick = async () => {
   try{ const r = await api("ping","hi"); setBridge(true,"OK (ping "+(r.echo||"")+")"); }
   catch(e){ setBridge(false, e.message); }
@@ -787,8 +980,7 @@ async function openSettings(){
   el("s_usewebapi").checked = !!cfg.use_steam_web_api;
   el("s_steamexe").value = cfg.steam_exe || "";
   el("s_extradir").value = cfg.extra_dir || "";
-  el("s_extradirs").value = (cfg.extra_dirs_list || []).join("\n");
-  el("s_steamlibs").value = (cfg.steam_lib_dirs || []).join("\n");
+  renderExtraDirs(cfg.extra_dirs_list || []);
   el("s_epic").checked = cfg.scan_epic !== false;
   el("s_gog").checked = cfg.scan_gog !== false;
   el("s_owned").checked = !!cfg.steam_include_owned;
@@ -820,6 +1012,25 @@ async function openSettings(){
   el("setModal").hidden = false;
 }
 function closeSettings(){ el("setModal").hidden = true; }
+
+// ── dodatkowe foldery Extra: lista z przyciskiem wyboru folderu ──────────────
+function renderExtraDirs(dirs){
+  const box = el("s_extradirsList"); box.innerHTML = "";
+  for (const d of dirs){
+    if (!d) continue;
+    const row = document.createElement("div"); row.className = "dir-item";
+    const span = document.createElement("span"); span.className = "dir-path";
+    span.textContent = d; span.title = d;
+    const del = document.createElement("button");
+    del.className = "dir-del"; del.type = "button"; del.textContent = "✕";
+    del.title = "Usuń"; del.onclick = () => row.remove();
+    row.appendChild(span); row.appendChild(del); box.appendChild(row);
+  }
+}
+function collectExtraDirs(){
+  return [...el("s_extradirsList").querySelectorAll(".dir-path")]
+    .map(s => s.textContent.trim()).filter(Boolean);
+}
 
 function romRow(s){
   const tr = document.createElement("tr");
@@ -954,7 +1165,7 @@ function renderPool(){
 }
 el("btnColl").onclick = openColl;
 el("collClose").onclick = closeColl;
-el("collModal").addEventListener("click", (e) => { if (e.target === el("collModal")) closeColl(); });
+bindBackdropClose("collModal", closeColl);
 el("collFilter").oninput = renderPool;
 el("collAdd").onclick = () => {
   const n = el("collNew").value.trim(); if (!n) return;
@@ -980,7 +1191,7 @@ el("collGenAll").onclick = async () => {
 el("btnSettings").onclick = openSettings;
 el("setClose").onclick = closeSettings;
 el("setCancel").onclick = closeSettings;
-el("setModal").addEventListener("click", (e) => { if (e.target === el("setModal")) closeSettings(); });
+bindBackdropClose("setModal", closeSettings);
 el("s_detect").onclick = async () => {
   try{ const r = await api("detect_steam"); if (r.steam_exe) el("s_steamexe").value = r.steam_exe;
        else el("setMsg").textContent = "Nie wykryto Steam.exe"; }catch(e){}
@@ -991,6 +1202,15 @@ el("s_testsgdb").onclick = async () => {
   catch(e){ el("s_sgdbres").textContent = "✗ błąd"; }
 };
 el("s_romadd").onclick = () => el("romTblBody").appendChild(romRow({primary_ext:"m3u,cue,iso,chd,bin"}));
+el("s_extradd").onclick = async () => {
+  try{
+    const r = await api("pick_folder", "");
+    if (r && r.path){
+      const cur = collectExtraDirs();
+      if (!cur.includes(r.path)){ cur.push(r.path); renderExtraDirs(cur); }
+    }
+  }catch(e){ el("setMsg").textContent = "Błąd wyboru folderu: " + e.message; }
+};
 // przyciski wyboru folderu / pliku (📁)
 el("setBody").addEventListener("click", async (e) => {
   const fb = e.target.closest("[data-folder]"), fl = e.target.closest("[data-file]");
@@ -1017,8 +1237,7 @@ el("setSave").onclick = async () => {
     api_keys: {sgdb_key: sv("s_sgdb"), steam_api_key: sv("s_steamkey"), steam_id64: sv("s_steamid")},
     use_steam_web_api: sc("s_usewebapi"),
     steam_exe: sv("s_steamexe"), extra_dir: sv("s_extradir"),
-    extra_dirs_list: el("s_extradirs").value.split("\n").map(s=>s.trim()).filter(Boolean),
-    steam_lib_dirs: el("s_steamlibs").value.split("\n").map(s=>s.trim()).filter(Boolean),
+    extra_dirs_list: collectExtraDirs(),
     scan_epic: sc("s_epic"), scan_gog: sc("s_gog"),
     steam_include_owned: sc("s_owned"),
     icon_platform_spine: sc("s_spine"), icon_spine_side: el("s_spineside").value,
@@ -1037,6 +1256,131 @@ el("setSave").onclick = async () => {
     else el("setMsg").textContent = "Błąd: " + (r.reason||"");
   }catch(e){ el("setMsg").textContent = "Błąd: " + e.message; }
 };
+// ── Edytor logo grzbietu (wariant + rozmiar %) ──────────────────────────────
+let LG = { platform: "", style: "", scale: 85, frac: 22, chosen: "" };
+let _lgPrevTimer = null;
+
+async function openLogoEditor(){
+  let info;
+  try{ info = await api("spine_logo_info"); }catch(e){ alert("Brak mostu."); return; }
+  LG.style = info.style || "Light - Color";
+  LG.scale = Math.round((info.scale || 0.85) * 100);
+  LG.frac = Math.round((info.frac || 0.22) * 100);
+  // kolorystyki (styl); oznacz te z pobranym cache
+  const cached = new Set(info.cached_styles || []);
+  const st = el("lgStyle"); st.innerHTML = "";
+  for (const [label, val] of Object.entries(info.styles || {})){
+    const o = document.createElement("option");
+    o.value = val; o.textContent = label + (cached.has(val) ? " ✓" : " (brak cache)");
+    if (val === LG.style) o.selected = true;
+    st.appendChild(o);
+  }
+  // platformy
+  const pl = el("lgPlat"); pl.innerHTML = "";
+  for (const p of (info.platforms || [])){
+    const o = document.createElement("option");
+    o.value = p.key; o.textContent = p.label;
+    pl.appendChild(o);
+  }
+  LG.platform = (info.platforms && info.platforms[0]) ? info.platforms[0].key : "";
+  el("lgScale").value = LG.scale;
+  el("lgScaleVal").textContent = LG.scale + "%";
+  el("lgFrac").value = LG.frac;
+  el("lgFracVal").textContent = LG.frac + "%";
+  el("lgMsg").textContent = ""; el("lgDlMsg").textContent = "";
+  el("logoModal").hidden = false;
+  await refreshVariants();
+  refreshPreview();
+}
+function closeLogoEditor(){ el("logoModal").hidden = true; }
+
+async function refreshVariants(){
+  const grid = el("lgVarGrid"); grid.innerHTML = "<div class='muted'>Ładuję…</div>";
+  let vs = [];
+  try{ vs = await api("spine_logo_variants", LG.platform, LG.style); }catch(e){}
+  el("lgVarCount").textContent = vs.length;
+  grid.innerHTML = "";
+  if (!vs.length){
+    grid.innerHTML = "<div class='muted'>Brak wariantów w cache dla tej kolorystyki. Użyj „Pobierz warianty”.</div>";
+    return;
+  }
+  for (const v of vs){
+    const d = document.createElement("div");
+    d.className = "logo-var"; d.title = v.name;
+    d.innerHTML = `<img src="${v.thumb}" alt="">`;
+    d.onclick = async () => {
+      grid.querySelectorAll(".logo-var").forEach(x => x.classList.remove("sel"));
+      d.classList.add("sel"); LG.chosen = v.source;
+      el("lgMsg").textContent = "Instaluję…";
+      try{
+        const r = await api("set_platform_logo", LG.platform, v.source);
+        el("lgMsg").textContent = r.ok ? "Wariant ustawiony ✓" : "Błąd instalacji";
+        refreshPreview();
+      }catch(e){ el("lgMsg").textContent = "Błąd: " + e.message; }
+    };
+    grid.appendChild(d);
+  }
+}
+
+function refreshPreview(){
+  if (_lgPrevTimer) clearTimeout(_lgPrevTimer);
+  _lgPrevTimer = setTimeout(async () => {
+    try{
+      const r = await api("spine_preview", LG.platform, LG.scale / 100, LG.frac / 100);
+      if (r.ok) el("lgPreview").src = r.preview;
+    }catch(e){}
+  }, 60);
+}
+
+el("s_logoedit").onclick = openLogoEditor;
+el("logoClose").onclick = closeLogoEditor;
+bindBackdropClose("logoModal", closeLogoEditor);
+el("lgPlat").onchange = async () => { LG.platform = el("lgPlat").value; await refreshVariants(); refreshPreview(); };
+el("lgStyle").onchange = async () => {
+  LG.style = el("lgStyle").value;
+  try{ await api("set_spine_logo_style", LG.style); }catch(e){}
+  await refreshVariants();
+};
+el("lgScale").oninput = () => {
+  LG.scale = parseInt(el("lgScale").value, 10);
+  el("lgScaleVal").textContent = LG.scale + "%";
+  refreshPreview();
+};
+el("lgFrac").oninput = () => {
+  LG.frac = parseInt(el("lgFrac").value, 10);
+  el("lgFracVal").textContent = LG.frac + "%";
+  refreshPreview();
+};
+el("lgDownload").onclick = async () => {
+  el("lgDlMsg").textContent = "Pobieram (to może potrwać)…";
+  el("lgDownload").disabled = true;
+  try{
+    const r = await api("download_logo_variants", LG.style);
+    el("lgDlMsg").textContent = r.total ? `Pobrano ${r.downloaded}/${r.total} ✓` : "Nic nie pobrano";
+    await refreshVariants();
+    // odśwież ✓ przy kolorystyce
+    const info = await api("spine_logo_info");
+    const cached = new Set(info.cached_styles || []);
+    for (const o of el("lgStyle").options){
+      const base = o.textContent.replace(/ ✓| \(brak cache\)$/,"");
+      o.textContent = base + (cached.has(o.value) ? " ✓" : " (brak cache)");
+    }
+  }catch(e){ el("lgDlMsg").textContent = "Błąd: " + e.message; }
+  finally{ el("lgDownload").disabled = false; }
+};
+el("lgSave").onclick = async () => {
+  el("lgMsg").textContent = "Zapisuję…";
+  try{
+    await api("set_spine_frac", LG.frac / 100);
+    await api("set_spine_logo_scale", LG.scale / 100);
+    SPINE.frac = LG.frac / 100;
+    el("lgMsg").textContent = "Zapisano ✓";
+    setTimeout(closeLogoEditor, 400);
+    // odśwież widok ROM, by kafelki dostały nową szerokość grzbietu
+    if (CURRENT_VIEW && CURRENT_VIEW.type === "rom") showRoms(CURRENT_VIEW.filter);
+  }catch(e){ el("lgMsg").textContent = "Błąd: " + e.message; }
+};
+
 el("selAll").onclick = () => selectKeys(currentKeys());
 el("selNone").onclick = () => selectKeys([]);
 el("selMissing").onclick = async () => {

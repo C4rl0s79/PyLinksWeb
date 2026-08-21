@@ -184,7 +184,3 @@ def unprotect(value: str) -> str:
         out = _dpapi("CryptUnprotectData", base64.b64decode(value[6:]))
         return out.decode("utf-8") if out else ""
     return value
-
-
-def is_protected(value: str) -> bool:
-    return bool(value) and value.startswith(("tpm:", "dpapi:"))

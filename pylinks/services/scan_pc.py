@@ -184,6 +184,35 @@ def _epic_manifests_dir() -> Path | None:
     return d if d.is_dir() else None
 
 
+def _install_present(*paths) -> bool:
+    """Czy instalacja gry realnie leży na dysku.
+
+    Launchery trzymają wpisy o grach w rejestrze / manifestach i NIE sprzątają
+    ich po ręcznym skasowaniu katalogu — bez tej kontroli skan pokazywał gry
+    „duchy" (a skrót do nich nie był zgłaszany jako osierocony, tylko odtwarzany).
+
+    Konserwatywnie: gdy weryfikacja jest niemożliwa — brak ścieżki albo DYSK
+    NIEDOSTĘPNY (odpięty zewnętrzny, niezamapowany sieciowy) — zwracamy True,
+    żeby nie skasować z listy gier, których chwilowo nie widać.
+    """
+    checkable = False
+    for raw in paths:
+        s = str(raw or "").strip().strip('"')
+        if not s:
+            continue
+        try:
+            pp = Path(s)
+            drive = pp.drive
+            if drive and not os.path.exists(drive + os.sep):
+                return True          # dysk niedostępny → nie oceniamy
+            checkable = True
+            if pp.is_dir() or pp.is_file():
+                return True
+        except Exception:
+            return True              # nie da się sprawdzić → zostawiamy
+    return not checkable             # nic nie było do sprawdzenia → zostawiamy
+
+
 def scan_epic_games() -> list[dict]:
     games: list[dict] = []
     d = _epic_manifests_dir()
@@ -200,6 +229,8 @@ def scan_epic_games() -> list[dict]:
                 if not name or not app_name:
                     continue
                 exe_path = str(Path(install) / launch) if install and launch else ""
+                if not _install_present(install, exe_path):
+                    continue          # wpis został, gry nie ma → to nie jest gra
                 games.append(_mk_game(
                     name=name, source="epic", game_dir=install or None,
                     launch_exe=exe_path or None, epic_app_name=app_name))
@@ -243,6 +274,8 @@ def scan_gog_games() -> list[dict]:
                             exe_full = (str(Path(path) / exe)
                                         if path and exe and not os.path.isabs(exe)
                                         else exe)
+                            if not _install_present(path, exe_full):
+                                continue   # wpis w rejestrze został, gry nie ma
                             games.append(_mk_game(
                                 name=name, source="gog", game_dir=path or None,
                                 launch_exe=exe_full or None, gog_id=gid))

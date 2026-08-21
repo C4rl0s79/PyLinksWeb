@@ -16,6 +16,8 @@
     </div>
     <div class="actions">
       <button class="btn" id="btnScan">🔍 Skanuj</button>
+      <button class="btn ghost" id="btnGetAll" title="Pobierz wszystkie grafiki (PC + ROM, ikony + Steam) do cache">⬇ Pobierz wszystko</button>
+      <button class="btn ghost" id="btnMakeAll" title="Stwórz wszystko: skróty .lnk/.url + wpisy w bibliotece Steam (PC + ROM)">🛠 Stwórz wszystko</button>
       <label class="sizer" title="Rozmiar miniatur">▦
         <input type="range" id="cardSize" min="96" max="288" step="8" value="160">
       </label>
@@ -27,9 +29,15 @@
     </div>
   </header>
 
+  <div id="pfBar" class="pf-bar" hidden>
+    <div class="pf-track"><div class="pf-fill" id="pfFill"></div></div>
+    <span class="pf-txt" id="pfTxt"></span>
+    <button class="btn ghost mini" id="pfStop" title="Zatrzymaj pobieranie">✕</button>
+  </div>
+
   <div class="layout">
     <aside class="sidebar">
-      <div class="side-group">
+      <div class="side-group" data-scope="pc" title="Prawy klik: pobierz/stwórz wszystko dla PC">
         <div class="side-title">Źródła PC <span id="pcTotal" class="muted"></span></div>
         <button class="side-item src active" data-src="">Wszystkie<span class="count" data-c="all">0</span></button>
         <button class="side-item src" data-src="steam">Steam<span class="count" data-c="steam">0</span></button>
@@ -37,7 +45,7 @@
         <button class="side-item src" data-src="epic">Epic<span class="count" data-c="epic">0</span></button>
         <button class="side-item src" data-src="extra">Extra<span class="count" data-c="extra">0</span></button>
       </div>
-      <div class="side-group">
+      <div class="side-group" data-scope="rom" title="Prawy klik: pobierz/stwórz wszystko dla ROM-ów">
         <div class="side-title">Systemy ROM <span id="romTotal" class="muted"></span></div>
         <div id="romSystems" class="platforms"><div class="muted pad">— skanuj —</div></div>
       </div>
@@ -84,6 +92,12 @@
     <button class="ctx-item" data-act="frame">▦ Ramki</button>
     <button class="ctx-item" data-act="default">↺ Domyślne</button>
     <button class="ctx-item" data-act="exe" hidden>📄 Wskaż plik .exe…</button>
+  </div>
+
+  <div id="grpMenu" class="ctx" hidden>
+    <div class="ctx-head" id="grpMenuHead">Grupa</div>
+    <button class="ctx-item" data-gact="get">⬇ Pobierz wszystkie grafiki</button>
+    <button class="ctx-item" data-gact="make">🛠 Stwórz wszystko (skróty + Steam)</button>
   </div>
 
   <!-- Kolekcje serii -->
@@ -140,10 +154,10 @@
           <h3>Skan PC</h3>
           <label>Steam.exe <span class="inln"><input id="s_steamexe" type="text" spellcheck="false"><button class="btn ghost mini" data-file="s_steamexe">📁</button><button class="btn ghost" id="s_detect">Wykryj</button></span></label>
           <label>Folder „Extra" <span class="inln"><input id="s_extradir" type="text" spellcheck="false"><button class="btn ghost mini" data-folder="s_extradir">📁</button></span></label>
-          <label>Dodatkowe foldery Extra (po jednym w linii)
-            <textarea id="s_extradirs" rows="2" spellcheck="false"></textarea></label>
-          <label>Dodatkowe biblioteki Steam (steamapps, po jednym w linii)
-            <textarea id="s_steamlibs" rows="2" spellcheck="false"></textarea></label>
+          <label>Dodatkowe foldery Extra
+            <div id="s_extradirsList" class="dir-list"></div>
+            <button class="btn ghost mini" id="s_extradd" type="button">➕ Dodaj folder…</button>
+          </label>
           <label class="chk"><input id="s_epic" type="checkbox"> Skanuj Epic</label>
           <label class="chk"><input id="s_gog" type="checkbox"> Skanuj GOG</label>
           <label class="chk"><input id="s_owned" type="checkbox"> Steam: dołącz posiadane (nie tylko zainstalowane)</label>
@@ -156,6 +170,7 @@
             <select id="s_spineside"><option value="left">lewa</option><option value="right">prawa</option></select>
           </label>
           <label>Folder logotypów platform <input id="s_logodir" type="text" spellcheck="false"></label>
+          <button class="btn ghost" id="s_logoedit" type="button">🎨 Grzbiet — szerokość i logo…</button>
         </section>
 
         <section class="set-sec">
@@ -236,6 +251,53 @@
         <span class="pk-bar-txt muted" id="pkBarTxt"></span>
       </div>
       <div id="pkGrid" class="pk-grid"></div>
+    </div>
+  </div>
+
+  <!-- Edytor logo grzbietu: wariant + rozmiar (%) -->
+  <div id="logoModal" class="modal" hidden>
+    <div class="modal-box" style="max-width:900px">
+      <div class="modal-head">
+        <div>
+          <div class="modal-title">Grzbiet platformy</div>
+          <div class="modal-sub muted">Ustaw szerokość grzbietu (% ikony), rozmiar i wariant logo.</div>
+        </div>
+        <button class="btn ghost" id="logoClose">✕</button>
+      </div>
+      <div class="logo-ed">
+        <div class="logo-ed-top">
+          <label>Kolorystyka
+            <select id="lgStyle"></select>
+          </label>
+          <label>Platforma
+            <select id="lgPlat"></select>
+          </label>
+          <button class="btn ghost mini" id="lgDownload" title="Pobierz komplet wariantów tej kolorystyki">⬇ Pobierz warianty</button>
+          <span id="lgDlMsg" class="muted"></span>
+        </div>
+        <div class="logo-ed-body">
+          <div class="logo-ed-preview">
+            <div class="muted" style="margin-bottom:6px">Podgląd grzbietu</div>
+            <img id="lgPreview" class="logo-ed-prev-img" alt="">
+            <div class="logo-ed-scale">
+              <label>Szerokość grzbietu <span id="lgFracVal" class="muted">22%</span></label>
+              <input id="lgFrac" type="range" min="12" max="40" step="1" value="22">
+            </div>
+            <div class="logo-ed-scale">
+              <label>Rozmiar logo w grzbiecie <span id="lgScaleVal" class="muted">85%</span></label>
+              <input id="lgScale" type="range" min="30" max="100" step="1" value="85">
+            </div>
+          </div>
+          <div class="logo-ed-variants">
+            <div class="muted" style="margin-bottom:6px">Warianty (<span id="lgVarCount">0</span>)</div>
+            <div id="lgVarGrid" class="logo-var-grid"></div>
+          </div>
+        </div>
+      </div>
+      <div class="set-foot">
+        <button class="btn" id="lgSave">Zapisz i zamknij</button>
+        <span id="lgMsg" class="muted"></span>
+      </div>
     </div>
   </div>
 

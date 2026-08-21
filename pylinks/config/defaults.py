@@ -36,6 +36,7 @@ def _default_config() -> dict:
         # — pozwala odróżnić gry o tym samym tytule na różnych platformach.
         "icon_platform_spine": False,
         "icon_spine_side": "left",   # "left" | "right"
+        "icon_spine_frac": 0.22,     # ile % szerokości ikony zajmuje grzbiet (0.12–0.40)
         # niekwadratowe grafiki (plakaty) → kwadratowa ikona:
         #   "pad"  = przezroczyste ramki (całość widoczna),
         #   "crop" = kadrowanie do kwadratu (skraje obcięte).
@@ -47,6 +48,7 @@ def _default_config() -> dict:
         # folder z logotypami platform (auto-pobierane, gdy pusty i grzbiet ON)
         "platform_logo_dir": str(SCRIPT_DIR / "platform_logos"),
         "spine_logo_style": "Light - Just White",  # kolorystyka logotypów grzbietu
+        "spine_logo_scale": 0.85,   # ile % szerokości grzbietu zajmuje logo (0.30–1.0)
         "filters": {
             "exe_skip_regex": DEFAULT_EXE_SKIP_REGEX,
             "min_icon_size": DEFAULT_MIN_SIZE,

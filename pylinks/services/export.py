@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 
 from pylinks.core.naming import safe_name
+from pylinks.core import discs as _discs
 from pylinks.core.rom_args import _rom_build_args
 from pylinks.core import spine as _spine
 from pylinks.services import art as _art
@@ -37,7 +38,8 @@ def _raw_bytes(cache_dir: Path, key: str, mode: str = "icon") -> bytes | None:
 
 def bake_ico(cache_dir: Path, key: str, fit: str, offset: float,
              spine_system: str = "", spine_side: str = "left",
-             logo_dir: str = "") -> bytes | None:
+             logo_dir: str = "", logo_scale: float = 0.85,
+             spine_frac: float = 0.22) -> bytes | None:
     """Piecze .ico: surowa okładka → kadr(fit/offset) → grzbiet(opc.) → .ico."""
     raw = _raw_bytes(cache_dir, key, "icon")
     if not raw:
@@ -50,7 +52,8 @@ def bake_ico(cache_dir: Path, key: str, fit: str, offset: float,
             base = Image.open(BytesIO(raw)).convert("RGBA")
         except Exception:
             return None
-        img = _spine.add_platform_spine(base, spine_system, spine_side, logo_dir=logo_dir)
+        img = _spine.add_platform_spine(base, spine_system, spine_side, frac=spine_frac,
+                                        logo_dir=logo_dir, logo_scale=logo_scale)
     else:
         img = _art.display_thumb_img(raw, "icon", fit, offset, size=256)
     if img is None:
@@ -230,6 +233,9 @@ def _launch_for(game: dict, creator: ShortcutCreator) -> dict | None:
         emu = game.get("emulator", "")
         if not emu:
             return None
+        # .m3u tylko dla emulatorów, które je czytają; reszta dostaje DYSK
+        # (PCSX2/Dolphin/RPCS3 padają na playliście). Działa dwukierunkowo.
+        rom = _discs.disc_path_for_emulator(rom, emu)
         return {"kind": "lnk", "target": emu,
                 "args": _rom_build_args(game.get("launch_args", ""), rom),
                 "work_dir": str(Path(emu).parent)}
@@ -254,6 +260,8 @@ def export_games(cfg: dict, games: list[dict], cache_dir: Path,
     spine_on = bool(cfg.get("icon_platform_spine", False))
     spine_side = cfg.get("icon_spine_side", "left")
     logo_dir = cfg.get("platform_logo_dir", "")
+    logo_scale = float(cfg.get("spine_logo_scale", 0.85) or 0.85)
+    spine_frac = float(cfg.get("icon_spine_frac", 0.22) or 0.22)
     icons_dir = Path(cache_dir) / "icons"
     icons_dir.mkdir(parents=True, exist_ok=True)
 
@@ -287,11 +295,11 @@ def export_games(cfg: dict, games: list[dict], cache_dir: Path,
         fit, off = _crop(key)
         spine_sys = g.get("system", "") if (spine_on and g.get("source") == "rom") else ""
         ico_path = ""
-        ico = bake_ico(cache_dir, key, fit, off, spine_sys, spine_side, logo_dir)
+        ico = bake_ico(cache_dir, key, fit, off, spine_sys, spine_side, logo_dir,
+                       logo_scale, spine_frac)
         if ico:
-            ip = icons_dir / f"{_safe_ico(key)}.ico"
             try:
-                ip.write_bytes(ico); ico_path = str(ip)
+                ico_path = write_cache_ico(icons_dir, key, ico)
             except Exception:
                 ico_path = ""
         else:
@@ -325,3 +333,34 @@ def export_games(cfg: dict, games: list[dict], cache_dir: Path,
 def _safe_ico(key: str) -> str:
     import re
     return re.sub(r"[^A-Za-z0-9._-]+", "_", key)[:180]
+
+
+def write_cache_ico(icons_dir: Path, key: str, data: bytes) -> str:
+    """Zapisuje .ico pod nazwą <klucz>_<md5(treści)>.ico i zwraca ścieżkę.
+
+    WAŻNE (cache ikon Windows): Explorer buforuje ikonę per ŚCIEŻKA. Przy stałej
+    nazwie <klucz>.ico podmiana grafiki nie zmieniała ścieżki, więc shell dalej
+    serwował STARĄ ikonę z bazy iconcache — restart explorera tego nie naprawia.
+    Hash treści w nazwie sprawia, że inna grafika = inna ścieżka = świeża ikona
+    od razu. Ta sama treść → ta sama nazwa (bez śmiecenia); starsze warianty
+    tego samego klucza są sprzątane.
+    """
+    import hashlib
+    icons_dir.mkdir(parents=True, exist_ok=True)
+    stem = _safe_ico(key)
+    target = icons_dir / f"{stem}_{hashlib.md5(data).hexdigest()[:10]}.ico"
+    if not target.exists():
+        target.write_bytes(data)
+    for old in icons_dir.glob(f"{stem}_*.ico"):   # sprzątnij poprzednie warianty
+        if old != target:
+            try:
+                old.unlink()
+            except Exception:
+                pass
+    legacy = icons_dir / f"{stem}.ico"            # nazwa sprzed poprawki
+    if legacy.exists():
+        try:
+            legacy.unlink()
+        except Exception:
+            pass
+    return str(target)
