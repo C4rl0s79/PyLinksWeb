@@ -128,27 +128,24 @@ async function runScan(){
   }
   await scanRomsUI();   // skan ROM-ów
   checkOrphans();       // monit o osieroconych skrótach
-  startPrefetch();      // dociąganie kompletu grafik Steam (grid+hero+logo) w tle
+  // UWAGA: skan NIE dociąga kompletu grafik. Okładki widoczne w siatce doczytują
+  // się leniwie (loadCovers) przy wejściu na platformę; komplet grid+hero+logo
+  // pobiera się WYŁĄCZNIE na żądanie — „⬇ Pobierz wszystko" albo prawy klik na
+  // grupie PC/ROM. Automat po każdym skanie bił po SGDB i puchł cache.
 }
 
 // ── zadania w tle (pobierz/stwórz wszystko) + pasek postępu ──────────────────
 let PF_TIMER = null;
 const SCOPE_LABEL = {all:"wszystko", pc:"PC", rom:"ROM-y"};
 
-// auto po skanie: dociągnij grafiki Steam (grid+hero+logo) dla wszystkich
-async function startPrefetch(){
-  await startJob("job_download", {scope:"all", icon:false, steam:true},
-                 "Pobieram grafiki Steam", true);   // silent = bez komunikatów
-}
-
 // uruchamia zadanie i pokazuje pasek; label = tekst wiodący. Zwraca reason||"".
-async function startJob(method, args, label, silent){
+async function startJob(method, args, label){
   let r;
   try{ r = await api(method, args.scope, args.icon, args.steam); }
-  catch(e){ if (!silent) toast("Błąd: " + e.message); return "error"; }
+  catch(e){ toast("Błąd: " + e.message); return "error"; }
   if (!r || !r.started){
     const reason = (r && r.reason) || "nie uruchomiono";
-    if (!silent) toast("Nie uruchomiono: " + reason);
+    toast("Nie uruchomiono: " + reason);
     return reason;
   }
   el("pfBar").hidden = false;
@@ -926,7 +923,7 @@ el("pfStop").onclick = async () => {
 // ── Pobierz wszystko / Stwórz wszystko (globalnie lub per grupa) ──────────────
 async function doGetAll(scope){
   await startJob("job_download", {scope, icon:true, steam:true},
-                 `Pobieram grafiki (${SCOPE_LABEL[scope]||scope})`, false);
+                 `Pobieram grafiki (${SCOPE_LABEL[scope]||scope})`);
 }
 async function doMakeAll(scope){
   let running = false;

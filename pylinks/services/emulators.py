@@ -150,6 +150,13 @@ def _find_retroarch_core(plat: str, base_emu: str) -> tuple:
     return "", ""
 
 
+# katalogi, w których leży KOPIA emulatora, a nie jego instalacja:
+# PCSX2 rozpakowuje aktualizację do UPDATE_STAGING i kasuje ją po restarcie —
+# wykryty stamtąd `.exe` znika, a skróty przestają działać.
+_EMU_SKIP_DIRS = ("update_staging", "updates", "update", "backup", "old",
+                  "temp", "tmp", "cache", "downloads", "_old")
+
+
 def _all_emu_exes(base_emu: str, limit: int = 3000) -> list:
     out = []
     base = Path(base_emu)
@@ -157,7 +164,12 @@ def _all_emu_exes(base_emu: str, limit: int = 3000) -> list:
         return out
     for pat in ("*.exe", "*/*.exe", "*/*/*.exe"):
         try:
-            out += [str(p) for p in base.glob(pat)]
+            for p in base.glob(pat):
+                if any(part.lower() in _EMU_SKIP_DIRS for part in p.parts):
+                    continue
+                if not p.is_file():
+                    continue
+                out.append(str(p))
         except Exception:
             pass
         if len(out) >= limit:

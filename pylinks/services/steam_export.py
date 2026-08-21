@@ -123,8 +123,25 @@ def is_steam_running() -> bool:
 
 
 # ── budowa wpisu ───────────────────────────────────────────────────────────
+_BS = chr(92)
+
+
+def _norm_exe(exe: str) -> str:
+    """Ścieżka exe w postaci KANONICZNEJ: bez cudzysłowów, ukośniki w przód.
+
+    appid skrótu to crc32(exe + nazwa), więc sam ZAPIS ścieżki decyduje o tożsamości
+    wpisu. Steam (i poprzednia wersja PyLinks) trzyma `Exe` z ukośnikami w przód;
+    my podawaliśmy backslashe z configu, więc ta sama gra dostawała inny appid i
+    Steam pokazywał ją DWA razy. Normalizacja przywraca zgodność ze wpisami, które
+    już są w bibliotece — a przy okazji zachowuje pobrane wcześniej grafiki
+    (pliki grid mają appid w nazwie).
+    """
+    return str(exe or "").strip().strip('"').replace(_BS, "/")
+
+
 def _shortcut_appid(exe: str, name: str) -> int:
-    return (binascii.crc32((exe + name).encode("utf-8")) | 0x80000000) & 0xFFFFFFFF
+    return (binascii.crc32((_norm_exe(exe) + name).encode("utf-8"))
+            | 0x80000000) & 0xFFFFFFFF
 
 
 def _tags_for(game: dict) -> list:
@@ -164,10 +181,13 @@ def _build_entry(game: dict, launch: dict, icon_path: str = ""):
     name = game.get("name", "")
     appid = _shortcut_appid(exe, name)
     tags = _tags_for(game)
+    exe_c = _norm_exe(exe)                       # kanoniczny zapis (jak u Steama)
+    start_c = _norm_exe(start) if start else (
+        _norm_exe(str(Path(exe).parent)) if Path(exe).exists() else "")
     entry = {
         "appid": appid, "AppName": name,
-        "Exe": f'"{exe}"' if not exe.startswith('"') else exe,
-        "StartDir": start or (str(Path(exe).parent) if Path(exe).exists() else ""),
+        "Exe": f'"{exe_c}"',
+        "StartDir": start_c,
         "icon": icon_path, "ShortcutPath": "", "LaunchOptions": args,
         "IsHidden": 0, "AllowDesktopConfig": 1, "AllowOverlay": 1, "OpenVR": 0,
         "Devkit": 0, "DevkitGameID": "", "DevkitOverrideAppID": 0, "LastPlayTime": 0,
@@ -319,6 +339,53 @@ def _steam_asset_bytes(cache_dir: Path, key: str, asset: str) -> "bytes | None":
 
 
 # ── orkiestracja ───────────────────────────────────────────────────────────
+def find_steam_selflinks(entries: list) -> list:
+    """Wpisy będące skrótem do gry, którą Steam i tak ma w bibliotece.
+
+    Rozpoznanie: uruchamiają `steam.exe` z `-applaunch <appid>`. Takie pozycje
+    dublują grę w bibliotece i nigdy nie powinny były powstać.
+    """
+    out = []
+    for e in entries:
+        exe = _norm_exe(e.get("Exe") or "").lower()
+        args = str(e.get("LaunchOptions") or "")
+        if exe.endswith("/steam.exe") and "-applaunch" in args:
+            out.append(e)
+    return out
+
+
+def _entry_name(e: dict) -> str:
+    """Nazwa wpisu — Steam zapisuje klucz małą literą (`appname`), my `AppName`."""
+    return e.get("appname") or e.get("AppName") or ""
+
+
+def _collapse_twins(by_appid: dict) -> int:
+    """Scala wpisy będące TYM SAMYM skrótem, a mające różne appid.
+
+    Powód: appid = crc32(exe + nazwa), więc sam zapis ścieżki (backslash vs ukośnik
+    w przód) tworzył drugi wpis dla tej samej gry. Za bliźniaki uznajemy wyłącznie
+    wpisy o identycznej nazwie, ścieżce exe I argumentach — dzięki temu osobne
+    pozycje tej samej gry (np. płyta bonusowa „The Making of") ZOSTAJĄ.
+    Zostaje wpis o kanonicznym appid, żeby zachować już pobrane grafiki.
+    """
+    groups: dict = {}
+    for appid, e in list(by_appid.items()):
+        ident = (_entry_name(e), _norm_exe(e.get("Exe") or ""),
+                 str(e.get("LaunchOptions") or "").replace(_BS, "/").lower())
+        groups.setdefault(ident, []).append(appid)
+    removed = 0
+    for (name, exe, _args), ids in groups.items():
+        if len(ids) < 2:
+            continue
+        canon = _shortcut_appid(exe, name)
+        keep = canon if canon in ids else ids[0]
+        for a in ids:
+            if a != keep:
+                by_appid.pop(a, None)
+                removed += 1
+    return removed
+
+
 def export_to_steam(cfg: dict, games: list, cache_dir: Path, progress=None) -> dict:
     from pylinks.api import _game_key
     configs = find_userdata_configs(cfg.get("steam_exe", ""),
@@ -354,6 +421,12 @@ def export_to_steam(cfg: dict, games: list, cache_dir: Path, progress=None) -> d
                 progress(gi + 1, total, g.get("name", ""))
             except Exception:
                 pass
+        if g.get("source") == "steam":
+            # gra JEST już w bibliotece Steam — dodanie jej jako skrótu
+            # „Non-Steam" (steam.exe -applaunch) robi z niej DRUGĄ pozycję.
+            # Skrót na pulpicie owszem, wpis w bibliotece nigdy.
+            skipped += 1
+            continue
         _k0 = _game_key(g)
         if exe_over.get(_k0):
             g["exe_override"] = exe_over[_k0]
@@ -393,6 +466,8 @@ def export_to_steam(cfg: dict, games: list, cache_dir: Path, progress=None) -> d
         if plat:
             tag_appids.setdefault(plat, []).append(appid)
 
+    merged = _collapse_twins(by_appid)      # scal bliźniaki po zmianie zapisu ścieżki
+
     # zapis shortcuts.vdf (backup + atomowo)
     try:
         if vdf_path.exists():
@@ -406,5 +481,6 @@ def export_to_steam(cfg: dict, games: list, cache_dir: Path, progress=None) -> d
 
     coll = write_collections(config_dir, tag_appids)
     return {"ok": True, "added": added, "art": art_n, "skipped": skipped,
+            "merged": merged,
             "config_dir": str(config_dir), "collections": coll,
             "steam_running": is_steam_running()}

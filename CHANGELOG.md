@@ -3,6 +3,56 @@
 Wszystkie istotne zmiany w PyLinksWeb. Format oparty na
 [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/).
 
+## [9.6.0] — 2026-08-21
+
+### Zmienione
+- **Stan per-gra przeniesiony z `config.json` do SQLite** (`Cache/pylinks.db`).
+  Dane per-gra stanowiły **85 % configu** (626 gier → 66,9 KB) i rosły z biblioteką;
+  każde kliknięcie ikony przepisywało CAŁY plik, a zapis szedł przez `write_text()`
+  bez pliku tymczasowego — awaria w trakcie mogła obciąć config i zabrać klucze API
+  oraz systemy ROM. Teraz: jeden UPSERT po indeksie zamiast przepisywania pliku.
+  Migracja jednorazowa przeniosła **753 wybory, 63 kadry i 13 nadpisań**;
+  `config.json` **66,9 KB → 8,5 KB (−87 %)` i przestaje rosnąć. Kopia zapasowa
+  `config.json.bak-*`. Odczyty w całej aplikacji zostały bez zmian — dane z bazy
+  są nakładane na te same klucze configu (`_overlay_store`).
+- **Zapis ustawień jest atomowy** (`tmp` + `os.replace`) — koniec ryzyka obcięcia.
+- Usunięty legacy `selected_indices` (71 wpisów, nigdzie nieczytane).
+
+### Naprawione
+- **Gry ze Steama trafiały do biblioteki Steam po raz DRUGI.** Eksport dodawał je
+  jako skróty „Non-Steam" (`steam.exe -applaunch <appid>`) — a te gry Steam ma już
+  u siebie, więc każda widniała dwa razy. Skrót na pulpicie ma sens, wpis
+  w bibliotece nigdy: eksport pomija teraz gry o źródle `steam`. Nowa akcja
+  `steam_cleanup()` usuwa te, które już powstały (u nas: **63 wpisy**).
+- **Auto-wykrywanie emulatorów brało plik z folderu aktualizacji.** PCSX2 rozpakowuje
+  nową wersję do `UPDATE_STAGING` i kasuje ten katalog po restarcie — wykryty stamtąd
+  `pcsx2-qt.exe` **przestawał istnieć**, a wpisy Steam wskazywały na martwą ścieżkę
+  (i miały inny `appid`, więc dublowały działające). Skanowanie pomija teraz katalogi
+  `UPDATE_STAGING`/`updates`/`backup`/`temp`… i bierze wyłącznie istniejące pliki.
+  Naprawa objęła 149 gier PS2.
+
+- **Eksport do Steam tworzył DRUGI wpis dla gier już dodanych.** `appid` skrótu to
+  `crc32(exe + nazwa)`, więc o tożsamości wpisu decyduje sam **zapis ścieżki**:
+  Steam (i poprzednia wersja PyLinks) trzyma `Exe` z ukośnikami w przód, a my
+  podawaliśmy backslashe z configu — ta sama gra dostawała inny appid i pojawiała
+  się w bibliotece dwa razy. Ścieżka jest teraz normalizowana (`_norm_exe`), więc
+  eksport trafia w **istniejące** wpisy: dla 110 gier PS1 — 110 trafień, 0 nowych.
+  Przy okazji ratuje to pobrane wcześniej grafiki (pliki `grid` mają appid w nazwie).
+  Eksport scala też bliźniaki powstałe wcześniej (`_collapse_twins`), ale wyłącznie
+  przy identycznej nazwie, ścieżce **i argumentach** — osobne pozycje tej samej gry
+  (np. płyta bonusowa „The Making of") zostają nietknięte.
+
+- **Zapamiętany wybór grafiki nigdy nie wracał.** „Stuby" (odnośnik do wybranej
+  grafiki, nie sam obraz) miały sprawiać, że po usunięciu gry z dysku i jej
+  powrocie — albo po wyczyszczeniu cache — wraca DOKŁADNIE ta ikona, którą wybrał
+  użytkownik. Dane się zapisywały, ale **nic ich nie czytało**, więc leciało nowe
+  wyszukiwanie w SGDB i pierwszy lepszy wynik. Odtwarzanie działa teraz w trzech
+  formatach naraz: URL (szybka ścieżka, bez API), gołe ID SteamGridDB (442 wpisy
+  ze starej wersji, gdzie mapowanie ID→URL trzymała baza) oraz identyfikatory
+  IGDB/TGDB/SteamCDN (77) — dopasowywane po `id` wśród kandydatów gry.
+  Odzyskany wpis jest **dopisywany jako URL**, więc następnym razem idzie szybka
+  ścieżka. Dotyczy też grafik Steam (grid/hero/logo).
+
 ## [9.5.0] — 2026-08-21
 
 ### Naprawione
@@ -73,9 +123,11 @@ Wszystkie istotne zmiany w PyLinksWeb. Format oparty na
   oraz tryb ikon + Steam, ze wspólnym paskiem postępu dla całości operacji
   i przyciskiem zatrzymania. Prawy klik na grupie „Źródła PC" / „Systemy ROM"
   uruchamia to samo dla wybranej grupy.
-- **Automatyczne dociąganie kompletu grafik Steam** (grid + hero + logo) w tle
-  po skanie. Wcześniej pobierana była wyłącznie okładka, więc eksport do Steam
-  szedł bez tła i logo, o ile nie odwiedziło się okna wyboru każdej gry.
+- **Dociąganie kompletu grafik Steam** (grid + hero + logo) — wcześniej pobierana
+  była wyłącznie okładka, więc eksport do Steam szedł bez tła i logo, o ile nie
+  odwiedziło się okna wyboru każdej gry. Uruchamiane **na żądanie**: „⬇ Pobierz
+  wszystko" lub prawy klik na grupie. **Skan sam z siebie nic nie dociąga** —
+  okładki w siatce doczytują się leniwie przy wejściu na platformę, jak dotąd.
 - **Pasek „Wybrane grafiki"** w oknie trybu Steam — pokazuje, co realnie trafi
   do biblioteki; wybrany wariant ma wyraźną obwódkę i znacznik ✓, a lista
   przewija się do niego automatycznie.

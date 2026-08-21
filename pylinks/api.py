@@ -19,6 +19,19 @@ from pylinks.config.defaults import _default_config
 from pylinks.config.migrate import migrate_config
 from pylinks.roms.presets import ROM_SYSTEM_PRESETS
 from pylinks.services import scan_pc, art
+from pylinks.core import store as _store
+
+
+def _write_config_atomic(raw: dict) -> None:
+    """Zapis configu przez plik tymczasowy + os.replace.
+
+    Zwykły write_text() obcina plik na starcie: awaria/zanik zasilania w trakcie
+    zostawiała PUSTY config — czyli utratę kluczy API i systemów ROM.
+    """
+    import os
+    tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
+    tmp.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, CONFIG_PATH)
 
 
 def _load_config() -> dict:
@@ -32,7 +45,35 @@ def _load_config() -> dict:
     if cfg is None:
         cfg = _default_config()
     _decrypt_secrets(cfg)
+    _overlay_store(cfg)
     return cfg
+
+
+def _overlay_store(cfg: dict) -> None:
+    """Wkłada stan per-gra z bazy pod te same klucze, których używał config.
+
+    Dzięki temu WSZYSTKIE odczyty (export, steam_export, kadr, nadpisania) zostają
+    bez zmian — zmienia się tylko miejsce przechowywania. W samym config.json tych
+    kluczy już nie ma: plik jest znowu małym plikiem ustawień.
+    """
+    try:
+        ch = _store.all_choices(CACHE_DIR)
+        icons, steam = {}, {}
+        for key, modes in ch.items():
+            ico = (modes.get("icon") or {}).get("icon")
+            if ico:
+                icons[key] = ico.get("url") or ico.get("source_id")
+            sm = modes.get("steam") or {}
+            if sm:
+                steam[key] = {a: (v.get("url") or v.get("source_id"))
+                              for a, v in sm.items() if v}
+        cfg["selected_icon_keys"] = icons
+        cfg["steam_art_by_key"] = steam
+        cfg["icon_crop_by_key"] = _store.all_crops(CACHE_DIR)
+        cfg["sgdb_override"] = _store.all_overrides(CACHE_DIR, "title")
+        cfg["exe_override"] = _store.all_overrides(CACHE_DIR, "exe")
+    except Exception:
+        pass
 
 
 # sekrety szyfrowane DPAPI (ścieżki w configu)
@@ -230,21 +271,16 @@ class Api:
     def set_exe_override(self, key: str, path: str) -> dict:
         """Ręczny plik uruchamiający dla gry (Extra/GOG) — używany przy eksporcie."""
         try:
-            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) \
-                if CONFIG_PATH.exists() else _default_config()
-            store = raw.get("exe_override")
-            if not isinstance(store, dict):
-                store = {}
-            if path:
-                store[key] = path
-            else:
-                store.pop(key, None)
-            raw["exe_override"] = store
-            CONFIG_PATH.write_text(json.dumps(raw, ensure_ascii=False, indent=2),
-                                   encoding="utf-8")
+            _store.set_override(CACHE_DIR, key, "exe", path or None)
         except Exception as e:
             return {"ok": False, "reason": str(e)}
         return {"ok": True}
+
+    @staticmethod
+    def _title_override(key: str, cfg: dict) -> str:
+        """Zapamiętane dopasowanie SGDB (query/ID) dla gry — wspólne dla obu trybów."""
+        store = cfg.get("sgdb_override", {}) or {}
+        return str(store.get(key, "") or "") if isinstance(store, dict) else ""
 
     def set_thumb_size(self, px) -> dict:
         try:
@@ -323,29 +359,11 @@ class Api:
             games = [g for g in games if g.get("source") == source]
         return [_slim_game(g) for g in games]
 
-    @staticmethod
-    def _title_override(key: str, cfg: dict) -> str:
-        """Zapamiętane dopasowanie SGDB (query/ID) dla gry — wspólne dla obu trybów."""
-        store = cfg.get("sgdb_override", {}) or {}
-        return str(store.get(key, "") or "") if isinstance(store, dict) else ""
-
     def _save_override(self, key: str) -> None:
-        """Utrwala ostatnie ręczne zapytanie/ID dla gry (config.sgdb_override)."""
+        """Utrwala ostatnie ręczne zapytanie/ID dla gry (nadpisanie tytułu)."""
         q = (self._pending.get(key) or "").strip()
-        if not q:
-            return
-        try:
-            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) \
-                if CONFIG_PATH.exists() else _default_config()
-            store = raw.get("sgdb_override")
-            if not isinstance(store, dict):
-                store = {}
-            store[key] = q
-            raw["sgdb_override"] = store
-            CONFIG_PATH.write_text(json.dumps(raw, ensure_ascii=False, indent=2),
-                                   encoding="utf-8")
-        except Exception:
-            pass
+        if q:
+            _store.set_override(CACHE_DIR, key, "title", q)
 
     def _find_game(self, key: str) -> dict | None:
         for g in self._pc_games:
@@ -549,6 +567,43 @@ class Api:
             return {"ok": False, "reason": "brak gier"}
         return _se.export_to_steam(_load_config(), games, CACHE_DIR)
 
+    def steam_cleanup(self, dry_run: bool = True) -> dict:
+        """Usuwa z biblioteki Steam wpisy dublujące gry, które Steam już ma.
+
+        Chodzi o skróty `steam.exe -applaunch <appid>` — dodane omyłkowo jako
+        „Non-Steam", przez co każda gra Steam widniała dwa razy. Wymaga
+        ZAMKNIĘTEGO Steama (inaczej nadpisze plik przy wyjściu).
+        """
+        import shutil, uuid, os
+        from datetime import datetime
+        from pylinks.services import steam_export as _se
+        cfg = _load_config()
+        dirs = _se.find_userdata_configs(cfg.get("steam_exe", ""),
+                                         cfg.get("steam_userdata_dir", ""))
+        if not dirs:
+            return {"ok": False, "reason": "nie znaleziono userdata Steam"}
+        vdf = dirs[0] / "shortcuts.vdf"
+        entries = _se.read_shortcuts_vdf(vdf)
+        bad = _se.find_steam_selflinks(entries)
+        names = [_se._entry_name(e) for e in bad]
+        if dry_run:
+            return {"ok": True, "dry_run": True, "found": len(bad),
+                    "total": len(entries), "names": names[:50],
+                    "steam_running": _se.is_steam_running()}
+        if _se.is_steam_running():
+            return {"ok": False, "reason": "zamknij Steam przed sprzątaniem",
+                    "found": len(bad)}
+        keep = [e for e in entries if e not in bad]
+        try:
+            shutil.copy2(vdf, vdf.with_name(
+                f"shortcuts.vdf.bak-{datetime.now():%Y%m%d-%H%M%S}"))
+            tmp = vdf.with_name(f"shortcuts.tmp-{uuid.uuid4().hex}.vdf")
+            tmp.write_bytes(_se.write_shortcuts_vdf(keep))
+            os.replace(tmp, vdf)
+        except Exception as ex:
+            return {"ok": False, "reason": str(ex)}
+        return {"ok": True, "removed": len(bad), "left": len(keep), "names": names[:50]}
+
     def steam_running(self) -> dict:
         from pylinks.services import steam_export as _se
         return {"running": _se.is_steam_running()}
@@ -698,21 +753,11 @@ class Api:
         return {"key": key, "ok": True, "fit": fit, "offset": off}
 
     def _save_crop(self, key: str, entry) -> None:
-        try:
-            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) \
-                if CONFIG_PATH.exists() else _default_config()
-            store = raw.get("icon_crop_by_key")
-            if not isinstance(store, dict):
-                store = {}
-            if entry is None:
-                store.pop(key, None)
-            else:
-                store[key] = entry
-            raw["icon_crop_by_key"] = store
-            CONFIG_PATH.write_text(
-                json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        if entry is None:
+            _store.clear_crop(CACHE_DIR, key)
+        else:
+            _store.set_crop(CACHE_DIR, key, entry.get("fit", "pad"),
+                            float(entry.get("offset", 0.5)))
 
     def fetch_cover(self, key: str, mode: str = "icon") -> dict:
         """Pobiera grafikę z SGDB (lub czyta z cache) dla trybu. Kształt robi CSS."""
@@ -726,6 +771,9 @@ class Api:
                            and mode != "steam"
                            and bool(cfg.get("icon_platform_spine", False)))
         override = self._pending.get(key) or self._title_override(key, cfg)
+        # stub zapisany jako ID (stary format) → odzyskaj konkretną grafikę
+        if not art.has_cover(CACHE_DIR, key, mode):
+            self._restore_by_source_id(cfg, key, g, art._mode(mode))
         res = art.fetch_cover(cfg, CACHE_DIR, key, g, mode, prefer_portrait,
                               query=override)
         if res.get("found"):
@@ -733,6 +781,59 @@ class Api:
             fit, off = self._crop_for(key, cfg)
             res["fit"], res["offset"] = fit, off
         return res
+
+    def _all_candidates(self, cfg: dict, g: dict, query: str, mode: str) -> list:
+        """SteamGridDB + źródła dodatkowe (IGDB / TGDB / SteamCDN / Libretro)."""
+        cands = art.candidates_for_game(cfg, g, query=query, mode=mode)
+        if mode != "steam" and not query:
+            try:
+                seen = {c["id"] for c in cands}
+                if g.get("source") == "rom":
+                    from pylinks.services.extra_art import libretro_candidates
+                    if (cfg.get("extra_sources", {}) or {}).get("libretro", True):
+                        cands += [c for c in libretro_candidates(g.get("system", ""),
+                                                                 g.get("name", ""))
+                                  if c.get("id") not in seen]
+                else:
+                    from pylinks.services.extra_art import ExtraArtSources
+                    extra = ExtraArtSources(cfg).candidates(
+                        g.get("name", ""), str(g.get("appid") or ""), "PC")
+                    cands += [c for c in extra if c.get("id") not in seen]
+            except Exception:
+                pass
+        return cands
+
+    def _restore_by_source_id(self, cfg: dict, key: str, g: dict,
+                              mode: str = "icon") -> bool:
+        """Odtwarza wybór zapisany jako IDENTYFIKATOR kandydata (nie URL).
+
+        Stara wersja trzymała mapowanie id→URL w bazie SQLite, więc w configu
+        zostawało samo id (np. `113432`, `igdb_cover_9258`). Odzyskujemy je,
+        szukając kandydata gry o tym id. Znaleziony URL DOPISUJEMY do bazy, żeby
+        następnym razem poszła szybka ścieżka, bez odpytywania API.
+        """
+        asset = "grid" if mode == "steam" else "icon"
+        url, sid = _store.get_choice(CACHE_DIR, key, mode, asset)
+        if url or not sid:
+            return False                      # brak stuba albo już mamy URL
+        try:
+            q = self._title_override(key, cfg)
+            for c in self._all_candidates(cfg, g, q, mode):
+                if str(c.get("id")) != str(sid):
+                    continue
+                full = c.get("url") or c.get("thumb")
+                if not full:
+                    break
+                res = art.save_chosen_cover(CACHE_DIR, key, full, mode)
+                if res.get("found"):
+                    _store.set_choice(CACHE_DIR, key, mode, asset,
+                                      url=full, source_id=sid)
+                    self._invalidate(key)
+                    return True
+                break
+        except Exception:
+            pass
+        return False
 
     def cover_candidates(self, key: str, query: str = "", mode: str = "icon") -> dict:
         """Lista kandydatów do okna wyboru (miniatury jako data-URI) dla trybu.
@@ -747,22 +848,7 @@ class Api:
             self._pending[key] = query.strip()          # ręczne — zapamiętaj tymczasowo
         else:
             query = self._title_override(key, cfg)       # użyj zapisanego dopasowania
-        cands = art.candidates_for_game(cfg, g, query=query, mode=mode)
-        if mode != "steam" and not query:
-            try:
-                seen = {c["id"] for c in cands}
-                if g.get("source") == "rom":
-                    from pylinks.services.extra_art import libretro_candidates
-                    if (cfg.get("extra_sources", {}) or {}).get("libretro", True):
-                        cands += [c for c in libretro_candidates(g.get("system", ""), g.get("name", ""))
-                                  if c.get("id") not in seen]
-                else:
-                    from pylinks.services.extra_art import ExtraArtSources
-                    extra = ExtraArtSources(cfg).candidates(
-                        g.get("name", ""), str(g.get("appid") or ""), "PC")
-                    cands += [c for c in extra if c.get("id") not in seen]
-            except Exception:
-                pass
+        cands = self._all_candidates(cfg, g, query, mode)
         return {"key": key, "candidates": cands,
                 "reason": "" if cands else "brak wyników / brak klucza SGDB"}
 
@@ -915,6 +1001,8 @@ class Api:
                         # by sprawdzić istnienie, a wynik szedł do kosza.
                         if art.has_cover(CACHE_DIR, key, "icon"):
                             self._job["cached"] += 1
+                        elif self._restore_by_source_id(cfg_snap, key, g, "icon"):
+                            self._job["new"] += 1       # odtworzony wybór ze stuba
                         else:
                             pp = (g.get("source") == "rom"
                                   and bool(cfg_snap.get("icon_platform_spine", False)))
@@ -1020,51 +1108,21 @@ class Api:
         return {"started": True, "total": total, "steam": bool(steam)}
 
     def _save_steam_asset_sel(self, key: str, asset: str, url) -> None:
-        """Zapis wyboru typu Steam w config.steam_art_by_key[key][asset]."""
-        try:
-            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) \
-                if CONFIG_PATH.exists() else _default_config()
-            store = raw.get("steam_art_by_key")
-            if not isinstance(store, dict):
-                store = {}
-            entry = store.get(key)
-            if not isinstance(entry, dict):
-                entry = {}
-            if url is None:
-                entry.pop(asset, None)
-            else:
-                entry[asset] = url
-            if entry:
-                store[key] = entry
-            else:
-                store.pop(key, None)
-            raw["steam_art_by_key"] = store
-            CONFIG_PATH.write_text(
-                json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        """Zapis wyboru typu Steam (grid/hero/logo) w bazie."""
+        if url is None:
+            _store.clear_choice(CACHE_DIR, key, "steam", asset)
+        else:
+            _store.set_choice(CACHE_DIR, key, "steam", asset, url=url)
 
     # --- trwały zapis wyboru (icon→selected_icon_keys, steam→steam_art_by_key) ---
     def _save_selection(self, key: str, url, mode: str = "icon") -> None:
-        cfg_key = "steam_art_by_key" if str(mode).lower() == "steam" else "selected_icon_keys"
-        try:
-            raw = {}
-            if CONFIG_PATH.exists():
-                raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-            else:
-                raw = _default_config()
-            sel = raw.get(cfg_key)
-            if not isinstance(sel, dict):
-                sel = {}
-            if url is None:
-                sel.pop(key, None)       # reset — usuń wybór
-            else:
-                sel[key] = url
-            raw[cfg_key] = sel
-            CONFIG_PATH.write_text(
-                json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        """Zapamiętuje wybór grafiki (stub gry) w bazie — nie w config.json."""
+        m = "steam" if str(mode).lower() == "steam" else "icon"
+        asset = "grid" if m == "steam" else "icon"
+        if url is None:
+            _store.clear_choice(CACHE_DIR, key, m, asset)
+        else:
+            _store.set_choice(CACHE_DIR, key, m, asset, url=url)
 
     # --- tryb dopasowania ikony (kwadrat): "pad" | "crop" ---
     def get_fit_mode(self) -> str:
@@ -1084,8 +1142,7 @@ class Api:
             else:
                 raw = _default_config()
             raw[key] = value
-            CONFIG_PATH.write_text(
-                json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+            _write_config_atomic(raw)
         except Exception:
             pass
 
@@ -1160,8 +1217,7 @@ class Api:
             if v:
                 _set_path(raw, p, secure.protect(v))
         try:
-            CONFIG_PATH.write_text(
-                json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+            _write_config_atomic(raw)
         except Exception as e:
             return {"ok": False, "reason": str(e)}
         self._baked.clear()

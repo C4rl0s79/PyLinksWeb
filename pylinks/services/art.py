@@ -285,6 +285,22 @@ def raw_cover(cache_dir: Path, key: str, mode: str = "icon") -> str | None:
     return None
 
 
+def _saved_choice(cfg: dict, key: str, mode: str = "icon"):
+    """URL grafiki wybranej wcześniej przez użytkownika (z configu) albo None.
+
+    Tryb ikon → `selected_icon_keys[key]`; tryb Steam → `steam_art_by_key[key].grid`.
+    To „stub" gry: sam odnośnik, nie obraz — przeżywa usunięcie gry z dysku
+    i czyszczenie cache.
+    """
+    if _mode(mode) == "steam":
+        entry = (cfg.get("steam_art_by_key") or {}).get(key)
+        url = entry.get("grid") if isinstance(entry, dict) else entry
+    else:
+        url = (cfg.get("selected_icon_keys") or {}).get(key)
+    url = url if isinstance(url, str) else None
+    return url if (url or "").startswith(("http://", "https://")) else None
+
+
 def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict,
                 mode: str = "icon", prefer_portrait: bool = False,
                 query: str = "") -> dict:
@@ -299,6 +315,22 @@ def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict,
     hit = raw_cover(cache_dir, key, mode)     # kształt robi CSS — zwracamy surowy
     if hit:
         return {"key": key, "found": True, "data_uri": hit, "cached": True}
+
+    # ODTWORZENIE WCZEŚNIEJSZEGO WYBORU: config trzyma URL wybranej grafiki
+    # (a nie sam obraz), żeby po usunięciu gry i powrocie na dysk — albo po
+    # wyczyszczeniu cache — wróciła DOKŁADNIE ta ikona, którą wybrał użytkownik,
+    # zamiast pierwszego lepszego trafienia z SGDB.
+    saved = _saved_choice(cfg, key, mode)
+    if saved:
+        data = fetch(saved)
+        if data:
+            try:
+                out = _covers_dir(cache_dir, mode) / (_safe_key(key) + _ext(_mime(data)))
+                out.write_bytes(data)
+            except Exception:
+                pass
+            return {"key": key, "found": True, "data_uri": _to_data_uri(data),
+                    "cached": False, "restored": True}
 
     sgdb_key = (cfg.get("api_keys", {}) or {}).get("sgdb_key", "")
     client = SgdbClient(sgdb_key)
@@ -621,7 +653,17 @@ def prefetch_steam_art_for_game(cfg: dict, cache_dir: Path, key: str, game: dict
         return (client.logos_for_appid(val, per_page=8) if kind_id == "appid"
                 else client.logos_for_id(val, per_page=8))
 
+    saved_entry = (cfg.get("steam_art_by_key") or {}).get(key)
+    saved_entry = saved_entry if isinstance(saved_entry, dict) else {}
     for asset in need:
+        # najpierw ODTWÓRZ wcześniejszy wybór użytkownika (stub w configu),
+        # dopiero potem pytaj SGDB o „najlepszy" wariant
+        prev = saved_entry.get(asset)
+        if isinstance(prev, str) and prev.startswith(("http://", "https://")):
+            r = save_steam_asset(cache_dir, key, asset, prev)
+            if r.get("found"):
+                out[asset] = "new"
+                continue
         items = _list(asset) or []
         if asset == "hero":
             items = _prefer_hero(items)
