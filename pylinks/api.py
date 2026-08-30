@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import time
+import urllib.parse
 from pathlib import Path
 
 from pylinks import __version__
@@ -17,8 +18,8 @@ from pylinks.app_paths import SCRIPT_DIR, CACHE_DIR, LINKS_DIR, CONFIG_PATH
 from pylinks.constants import C
 from pylinks.config.defaults import _default_config
 from pylinks.config.migrate import migrate_config
-from pylinks.roms.presets import ROM_SYSTEM_PRESETS
 from pylinks.services import scan_pc, art
+from pylinks.services import thumbserver as _thumbsrv
 from pylinks.core import store as _store
 
 
@@ -84,6 +85,10 @@ SECRET_PATHS = [
     ("extra_sources", "igdb_client_id"),
     ("extra_sources", "igdb_client_secret"),
     ("extra_sources", "tgdb_key"),
+    ("extra_sources", "ss_devid"),
+    ("extra_sources", "ss_devpassword"),
+    ("extra_sources", "ss_user"),
+    ("extra_sources", "ss_password"),
 ]
 
 
@@ -129,6 +134,9 @@ def _deep_merge(dst: dict, patch: dict) -> None:
 def _game_key(g: dict) -> str:
     """Stabilny klucz gry (do ikon/wyboru). Nie zależy od pozycji."""
     src = g.get("source", "pc")
+    if src == "mame":
+        # klucz po NAZWIE SETU: tytuł bywa długi i zmienia się między wersjami MAME
+        return f"mame::{(g.get('set') or '').lower()}"
     if src == "rom":
         return f"rom::{(g.get('system') or '').lower()}::{(g.get('name') or '').strip().lower()}"
     if g.get("appid"):
@@ -237,6 +245,10 @@ class Api:
         # operacji (ikony, eksport). Frontend dostaje odchudzoną wersję.
         self._pc_games: list[dict] = []
         self._rom_games: list[dict] = []
+        self._mame_games: list[dict] = []      # biblioteka arcade (po grupowaniu)
+        # nazwa pliku skrótu → klucz gry; budowany leniwie, kasowany po skanie
+        self._stem_index: dict | None = None
+        self._set_to_group: dict | None = None   # zestaw MAME → klucz grupy
         # cache upieczonych miniatur w RAM: (key,mode,fit,offset) → data-URI
         self._baked: dict = {}
         # ostatnie ręczne zapytanie/ID per gra (do zapamiętania dopasowania SGDB)
@@ -290,20 +302,8 @@ class Api:
         self._save_config_value("thumb_size", px)
         return {"ok": True, "thumb_size": px}
 
-    def get_theme(self) -> dict:
-        return dict(C)
 
     # --- presety ROM (z silnika) ---
-    def list_rom_presets(self) -> list:
-        out = []
-        for p in ROM_SYSTEM_PRESETS:
-            out.append({
-                "name":    p.get("name", ""),
-                "display": p.get("display", p.get("name", "")),
-                "exts":    p.get("primary_ext", ""),
-                "note":    p.get("note", ""),
-            })
-        return out
 
     # --- biblioteka: skan istniejących skrótów LINKS/<platforma>/ ---
     def list_platforms(self) -> list:
@@ -330,9 +330,173 @@ class Api:
                 continue
             for f in sorted(d.iterdir()):
                 if f.suffix.lower() in (".lnk", ".url"):
-                    out.append({"name": f.stem, "platform": d.name,
-                                "icon": _shortcut_icon_uri(f)})
+                    stem = f.stem
+                    # Skrót arcade NIESIE nazwę zestawu w swoich argumentach —
+                    # to źródło pewne. Dopasowanie po nazwie pliku jest zgadywaniem
+                    # i myliło tytuły zbieżne („Super Street Fighter II" trafiało
+                    # w bootleg na Mega Drive zamiast w automat).
+                    key = self._key_from_args(f) or self._key_for_stem(stem, d.name)
+                    out.append({"name": stem, "platform": d.name,
+                                "icon": _shortcut_icon_uri(f),
+                                # klucz gry pozwala kliknąć skrót i ZMIENIĆ ikonę;
+                                # bez niego kafelek w tym widoku był martwy
+                                "key": key,
+                                "source": "link", "file": str(f)})
         return out
+
+    def _key_from_args(self, f) -> str:
+        """Klucz gry odczytany z ARGUMENTÓW skrótu (dotyczy arcade: `… <set>`)."""
+        if not self._mame_games:
+            return ""
+        if self._set_to_group is None:
+            m = {}
+            for g in self._mame_games:
+                gk = _game_key(g)
+                for v in g.get("variants", []) or ():
+                    if v.get("name"):
+                        m[v["name"].lower()] = gk
+                if g.get("set"):
+                    m[g["set"].lower()] = gk
+            self._set_to_group = m
+        try:
+            st = self._lnk_set(f)
+        except Exception:
+            return ""
+        return self._set_to_group.get((st or "").lower(), "")
+
+    def _key_for_stem(self, stem: str, platform: str = "") -> str:
+        """Klucz gry dla nazwy pliku skrótu (odwrotność nazewnictwa eksportu)."""
+        from pylinks.core.naming import safe_name
+        import re as _re
+
+        def norm(x):
+            return _re.sub(r"[^a-z0-9]+", "", (x or "").lower())
+
+        if self._stem_index is None:
+            idx = {}
+            for g in (list(self._pc_games) + list(self._rom_games)
+                      + list(self._mame_games)):
+                key = _game_key(g)
+                if not key:
+                    continue
+                names = [g.get("name", "")]
+                if g.get("source") == "mame":
+                    from pylinks.services import mame as _m
+                    names.append(_m.primary_title(g.get("name", "")))
+                    names.append(_m.clean_title(g.get("name", "")))
+                for n in names:
+                    for cand in (n, safe_name(n)):
+                        k = norm(cand)
+                        if k:
+                            idx.setdefault(k, key)
+            self._stem_index = idx
+        return self._stem_index.get(norm(stem), "")
+
+    def relink_icons(self, items: list) -> dict:
+        """Przepiekanie ikon dla WIELU skrótów naraz: [{key, file}, …].
+
+        Skróty zrobione zanim gra dostała okładkę (albo przed poprawką klucza
+        grafiki) zostają z gołą ikoną i same się nie naprawią — trzeba je przejść
+        raz jeszcze. COM inicjalizujemy RAZ na całą paczkę, nie na skrót.
+        """
+        from pylinks.core import log as _log
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+            co = True
+        except Exception:
+            co = False
+        done, failed = 0, []
+        try:
+            for it in items or ():
+                key, f = (it or {}).get("key", ""), (it or {}).get("file", "")
+                if not key or not f:
+                    failed.append({"file": f, "reason": "nierozpoznana gra"})
+                    continue
+                r = self.relink_icon(key, f)
+                if r.get("ok"):
+                    done += 1
+                else:
+                    failed.append({"file": Path(f).name,
+                                   "reason": r.get("reason", "")})
+        finally:
+            if co:
+                try:
+                    import gc
+                    gc.collect()
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
+        _log.write("links", f"naprawa ikon: {done} ok, {len(failed)} nieudanych")
+        return {"ok": True, "done": done, "failed": failed}
+
+    def relink_icon(self, key: str, file: str = "") -> dict:
+        """Podmienia ikonę w ISTNIEJĄCYM skrócie — po wyborze grafiki w LINKS.
+
+        Bez tego wybór w tym widoku zmieniał tylko podgląd: plik .lnk na dysku
+        dalej wskazywał starą ikonę.
+        """
+        from pylinks.services import export as _exp
+        from pylinks.core import log as _log
+        pth = Path(file) if file else None
+        if not pth or not pth.is_file():
+            return {"ok": False, "reason": "nie znaleziono pliku skrótu"}
+        cfg = _load_config()
+        try:
+            # Gdy okładki jeszcze nie ma (np. skrót zrobiony przed jej pobraniem),
+            # dociągamy ją tutaj, zamiast odmawiać.
+            if not art.has_cover(CACHE_DIR, key, "icon"):
+                g = self._find_game(key)
+                if g:
+                    art.fetch_cover(cfg, CACHE_DIR, key, g, "icon")
+            fit, off = self._crop_for(key, cfg)
+            # Bez parametrów grzbietu przepieczenie ZDEJMOWAŁO go z gotowej ikony
+            # — zgłoszone na Dreamcaście po edycji istniejącego skrótu.
+            data = _exp.bake_ico(CACHE_DIR, key, fit, off,
+                                 **_exp.bake_args(cfg, self._find_game(key) or {}))
+            if not data:
+                return {"ok": False, "reason": "brak okładki dla tej gry "
+                                               "— wybierz grafikę ręcznie"}
+            ico = _exp.write_cache_ico(CACHE_DIR / "icons", key, data)
+        except Exception as e:
+            return {"ok": False, "reason": str(e)}
+        if pth.suffix.lower() == ".url":
+            try:                      # .url trzyma ikonę jako zwykły wpis tekstowy
+                txt = pth.read_text(encoding="utf-8", errors="replace")
+                lines = [l for l in txt.splitlines()
+                         if not l.lower().startswith(("iconfile=", "iconindex="))]
+                lines += [f"IconFile={ico}", "IconIndex=0"]
+                pth.write_text(chr(10).join(lines) + chr(10), encoding="utf-8")
+            except Exception as e:
+                return {"ok": False, "reason": str(e)}
+            # Podgląd ikony jest zapamiętywany PO ŚCIEŻCE skrótu i nigdy nie był
+            # unieważniany — plik .lnk dostawał nową ikonę, a siatka pokazywała
+            # w kółko starą. Stąd „pobiera się, nie wyświetla".
+            _ICON_URI_CACHE.pop(str(pth), None)
+            _log.write("links", f"ikona podmieniona: {pth.name}")
+            return {"ok": True, "icon": ico}
+        try:
+            import pythoncom, win32com.client  # type: ignore
+            pythoncom.CoInitialize()
+        except Exception:
+            return {"ok": False, "reason": "brak pywin32"}
+        try:
+            sh = win32com.client.Dispatch("WScript.Shell")
+            sc = sh.CreateShortcut(str(pth))
+            sc.IconLocation = f"{ico},0"
+            sc.Save()
+        except Exception as e:
+            return {"ok": False, "reason": str(e)}
+        finally:
+            try:
+                import gc
+                gc.collect()
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
+        _ICON_URI_CACHE.pop(str(pth), None)   # patrz niżej: bez tego stara grafika
+        _log.write("links", f"ikona podmieniona: {pth.name}")
+        return {"ok": True, "icon": ico}
 
     # --- skan bibliotek PC (Steam/GOG/Epic/Extra) ---
     def scan_pc(self) -> dict:
@@ -344,6 +508,7 @@ class Api:
         cfg = _load_config()
         res = scan_pc.scan_pc_library(cfg)
         self._pc_games = res["games"]
+        self._stem_index = None
         return {
             "ok": True,
             "counts": res["counts"],
@@ -352,12 +517,6 @@ class Api:
             "games": [_slim_game(g) for g in res["games"]],
         }
 
-    def get_pc_games(self, source: str = "") -> list:
-        """Zwraca ostatnio zeskanowane gry PC (opcjonalnie filtr źródła)."""
-        games = self._pc_games
-        if source:
-            games = [g for g in games if g.get("source") == source]
-        return [_slim_game(g) for g in games]
 
     def _save_override(self, key: str) -> None:
         """Utrwala ostatnie ręczne zapytanie/ID dla gry (nadpisanie tytułu)."""
@@ -372,6 +531,9 @@ class Api:
         for g in self._rom_games:
             if _game_key(g) == key:
                 return g
+        for g in self._mame_games:
+            if _game_key(g) == key:
+                return g
         return None
 
     # --- skan ROM-ów (config.rom_support) ---
@@ -384,6 +546,7 @@ class Api:
         # mapa system → (emulator, launch_args) do budowy komendy przy eksporcie
         sysmap = {s.get("name", ""): s for s in cfg.get("rom_support", {}).get("systems", [])}
         self._rom_games = []
+        self._stem_index = None
         for s in res.get("systems", []):
             sc = sysmap.get(s["name"], {})
             for g in s.get("games", []):
@@ -409,11 +572,6 @@ class Api:
                 "spine": {"enabled": spine_on, "side": spine_side,
                           "frac": float(cfg.get("icon_spine_frac", 0.22) or 0.22)}}
 
-    def set_spine(self, enabled: bool, side: str = "left") -> dict:
-        self._save_config_value("icon_platform_spine", bool(enabled))
-        self._save_config_value("icon_spine_side", "right" if side == "right" else "left")
-        return {"ok": True, "enabled": bool(enabled),
-                "side": "right" if side == "right" else "left"}
 
     # --- warianty logo grzbietu + skala (edytor „ile % zajmuje logo") ---
     def spine_logo_info(self) -> dict:
@@ -429,12 +587,21 @@ class Api:
         have = []
         seen = set()
         for g in getattr(self, "_rom_games", []):
-            canon = _spine.spine_canon_key(g.get("system", ""))
-            if canon and canon not in seen and _sl.target_for(canon):
-                seen.add(canon)
-                have.append({"key": canon,
-                             "label": _sl.target_for(canon),
-                             "system": g.get("system", "")})
+            sysname = g.get("system", "")
+            # klucz = WŁASNA nazwa systemu. Kluczowanie po nazwie kanonicznej
+            # zjadało platformy z aliasem (SNESMSU1→SNES, SEGACD→MD): znikały
+            # z listy, więc nie dało się nadać im własnego logo.
+            key = _spine.logo_key_for(sysname)
+            if not key or key in seen:
+                continue
+            label = _sl.target_for(sysname)
+            if not label:
+                continue
+            seen.add(key)
+            have.append({"key": key,
+                         "label": label if key == _spine.spine_canon_key(sysname)
+                                  else f"{sysname} ({label})",
+                         "system": sysname})
         if not have:
             for k, tgt in _sl.PLATFORM_LOGO_TARGET.items():
                 have.append({"key": k, "label": tgt, "system": k})
@@ -488,13 +655,41 @@ class Api:
         return {"ok": False}
 
     def download_logo_variants(self, style: str = "") -> dict:
-        """Pobiera cały zestaw wariantów danej kolorystyki do lokalnego cache."""
+        """Pobiera zestaw wariantów danej kolorystyki — W TLE, z paskiem postępu.
+
+        Zestaw to ~2000 plików: wcześniej szło to synchronicznie przez most, więc
+        okno zamierało i nic nie było widać. Teraz leci jako zwykłe zadanie
+        (`job_status`), tak jak pobieranie grafik."""
+        import threading
         from pylinks.services import spine_logos as _sl
+        if self._job_busy():
+            return {"started": False, "reason": "zadanie już trwa"}
         cfg = _load_config()
         logo_dir = cfg.get("platform_logo_dir", "")
         style = style or cfg.get("spine_logo_style", "Light - Color")
-        got, total = _sl.download_variants(logo_dir, style)
-        return {"ok": total > 0, "downloaded": got, "total": total, "style": style}
+        if not logo_dir:
+            return {"started": False, "reason": "brak folderu logotypów"}
+        self._job_reset("logos", 0)
+        self._job["phase"] = style
+
+        def _worker():
+            def _prog(done, total):
+                self._job["done"], self._job["total"] = done, total
+                if self._job.get("cancel"):
+                    raise KeyboardInterrupt
+            try:
+                got, total = _sl.download_variants(logo_dir, style, progress=_prog)
+            except KeyboardInterrupt:
+                got, total = self._job["new"], self._job["total"]
+            except Exception:
+                got, total = 0, 0
+            self._job["new"] = got
+            self._job["running"] = False
+            self._job["result"] = {"kind": "logos", "downloaded": got,
+                                   "total": total, "style": style}
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return {"started": True, "style": style}
 
     def spine_preview(self, platform: str, scale: float = None,
                       frac: float = None) -> dict:
@@ -528,26 +723,9 @@ class Api:
         uri = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
         return {"ok": True, "preview": uri, "scale": sc, "frac": fr}
 
-    def get_rom_games(self, system: str = "") -> list:
-        games = self._rom_games
-        if system:
-            games = [g for g in games if g.get("system") == system]
-        return [{"key": _game_key(g), "name": g["name"],
-                 "system": g.get("system", ""), "path": g.get("path", "")}
-                for g in games]
 
     # --- eksport skrótów (.lnk/.url + ikony .ico do LINKS/<platforma>/) ---
-    def export_pc(self, source: str = "") -> dict:
-        games = self._pc_games
-        if source:
-            games = [g for g in games if g.get("source") == source]
-        return self._export(games)
 
-    def export_rom(self, system: str = "") -> dict:
-        games = self._rom_games
-        if system:
-            games = [g for g in games if g.get("system") == system]
-        return self._export(games)
 
     def export_keys(self, keys: list) -> dict:
         """Eksportuje tylko wskazane gry (po kluczach)."""
@@ -638,7 +816,8 @@ class Api:
             if names is None:
                 continue                     # tej platformy nie skanowaliśmy — pomiń
             for f in sorted(d.iterdir()):
-                if f.suffix.lower() in (".lnk", ".url") and f.stem not in names:
+                # stem bywa z doklejoną spacją (sortowanie serii) — porównujemy bez niej
+                if f.suffix.lower() in (".lnk", ".url") and f.stem.rstrip() not in names:
                     orphans.append({"name": f.stem, "platform": d.name, "path": str(f)})
         return {"orphans": orphans}
 
@@ -683,12 +862,18 @@ class Api:
 
     # --- grafiki: dwa tryby "icon" (kwadrat) / "steam" (portret) ---
     def _raw_uri(self, key: str, mode: str):
-        """Surowy obraz jako data-URI z cache RAM (albo z dysku). Kształt robi
-        CSS (object-fit/position), więc NIE pieczemy PIL do wyświetlania."""
+        """MINIATURA okładki jako data-URI (RAM → dysk). Kształt robi CSS.
+
+        Do siatki świadomie NIE wysyłamy pełnej rozdzielczości: kafelek ma ~200 px,
+        a okładki bywają 600×900, więc przez most szło ~500 KB na grafikę — przy
+        bibliotece arcade setki megabajtów na jedno przewinięcie. Pełny obraz
+        zostaje tam, gdzie jest naprawdę potrzebny: w oknie kadrowania i przy
+        pieczeniu .ico.
+        """
         ck = (key, mode)
         if ck in self._baked:
             return self._baked[ck]
-        uri = art.raw_cover(CACHE_DIR, key, mode)
+        uri = art.thumb_uri(CACHE_DIR, key, mode)
         if uri:
             self._baked[ck] = uri
         return uri
@@ -696,6 +881,8 @@ class Api:
     def _invalidate(self, key: str) -> None:
         for ck in [k for k in self._baked if k[0] == key]:
             self._baked.pop(ck, None)
+        for m in ("icon", "steam"):
+            art.clear_thumb(CACHE_DIR, key, m)   # inaczej zostałaby stara miniatura
 
     def cover_cached(self, key: str, mode: str = "icon") -> dict:
         """Surowy obraz z cache + per-grę kadr (fit/offset dla CSS)."""
@@ -705,17 +892,118 @@ class Api:
         return {"key": key, "found": bool(uri), "data_uri": uri,
                 "fit": fit, "offset": off, "cached": True}
 
+    @staticmethod
+    def _thumb_url(key: str, mode: str, ver: int) -> str:
+        """Adres miniatury dla siatki. `ver` (czas okładki) unieważnia cache
+        przeglądarki dokładnie wtedy, gdy grafika się zmieniła."""
+        base = _thumbsrv.base_url() or _thumbsrv.start(CACHE_DIR)
+        if not base:
+            return ""
+        return (f"{base}/{art._mode(mode)}/"
+                f"{urllib.parse.quote(key, safe='')}?v={ver}")
+
     def covers_batch(self, keys: list, mode: str = "icon") -> dict:
-        """ZBIORCZO w JEDNYM wywołaniu mostu: {key: {uri, fit, offset}}."""
+        """ZBIORCZO w JEDNYM wywołaniu mostu: {key: {uri, fit, offset} | False | None}.
+
+        `False` = wiemy, że dla tej gry nie ma grafiki w żadnym źródle. Bez tego
+        rozróżnienia interfejs przy KAŻDYM przerysowaniu dopytywał o te same
+        beznadziejne tytuły — przy bibliotece arcade to setki zbędnych przejść
+        przez most po wyczyszczeniu filtra.
+        """
         cfg = _load_config()
+        m = art._mode(mode)
+        known_miss = _store.all_overrides(CACHE_DIR, f"cover_miss_{m}")
+        # JEDNO przejście po katalogu okładek zamiast globa na każdy klucz.
+        # Nie czytamy tu ŻADNEGO obrazu: przy podawaniu po HTTP wystarczy wiedzieć,
+        # że okładka istnieje — bajty pobierze sama przeglądarka, równolegle.
+        stems = art.cover_index(CACHE_DIR, m)
         out = {}
         for k in keys:
-            uri = self._raw_uri(k, mode)
-            if not uri:
-                out[k] = None
+            if not k:
+                continue
+            ver = stems.get(art._safe_key(k))
+            if ver is None:
+                out[k] = False if k in known_miss else None
                 continue
             fit, off = self._crop_for(k, cfg)
-            out[k] = {"uri": uri, "fit": fit, "offset": off}
+            url = self._thumb_url(k, m, ver)
+            if url:
+                out[k] = {"url": url, "fit": fit, "offset": off}
+            else:                       # bez serwera zostaje stara droga
+                uri = self._raw_uri(k, mode)
+                out[k] = ({"uri": uri, "fit": fit, "offset": off} if uri else None)
+        return out
+
+    def covers_fetch_batch(self, keys: list, mode: str = "icon") -> dict:
+        """Dociąga BRAKUJĄCE okładki RÓWNOLEGLE i zapamiętuje nietrafienia.
+
+        Dotąd interfejs pobierał je po jednej, w pętli przez most — przy bibliotece
+        arcade wychodziło ~0,5 s na tytuł, czyli 2,5 minuty na porcję 300 kafelków,
+        i to od nowa przy każdym wejściu w widok, bo nieudane szukania nie zostawiały
+        śladu. Stąd wrażenie, że „grafiki przestały się wyświetlać".
+
+        Nietrafienia lądują w bazie (`cover_miss_<tryb>`), więc drugie wejście jest
+        natychmiastowe. Kasuje je „Odśwież okładki arcade" i ręczny wybór grafiki.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+        cfg = _load_config()
+        miss_kind = f"cover_miss_{art._mode(mode)}"
+        known_miss = _store.all_overrides(CACHE_DIR, miss_kind)
+        todo, out = [], {}
+        for k in keys:
+            if not k:
+                continue
+            uri = self._raw_uri(k, mode)
+            if uri:
+                fit, off = self._crop_for(k, cfg)
+                out[k] = {"uri": uri, "fit": fit, "offset": off}
+            elif k in known_miss:
+                out[k] = None            # wiemy, że nie ma — nie ruszamy sieci
+            else:
+                todo.append(k)
+
+        def _one(k):
+            g = self._find_game(k)
+            if not g:
+                return k, None
+            try:
+                pp = (g.get("source") == "rom" and mode != "steam"
+                      and bool(cfg.get("icon_platform_spine", False)))
+                override = self._pending.get(k) or self._title_override(k, cfg)
+                if not art.has_cover(CACHE_DIR, k, mode):
+                    self._restore_by_source_id(cfg, k, g, art._mode(mode))
+                r = art.fetch_cover(cfg, CACHE_DIR, k, g, mode, pp, query=override)
+                if (r or {}).get("found"):
+                    self._invalidate(k)
+                    return k, True
+                return k, False
+            except Exception:
+                return k, None
+
+        found = missed = 0
+        if todo:
+            with ThreadPoolExecutor(max_workers=6) as ex:
+                for k, ok in ex.map(_one, todo):
+                    if ok:
+                        found += 1
+                        fit, off = self._crop_for(k, cfg)
+                        p = art._raw_path(CACHE_DIR, k, art._mode(mode))
+                        url = (self._thumb_url(k, mode, int(p.stat().st_mtime))
+                               if p else "")
+                        if url:
+                            out[k] = {"url": url, "fit": fit, "offset": off}
+                        else:
+                            uri = self._raw_uri(k, mode)
+                            out[k] = ({"uri": uri, "fit": fit, "offset": off}
+                                      if uri else None)
+                    else:
+                        missed += 1
+                        out[k] = None
+                        _store.set_override(CACHE_DIR, k, miss_kind, int(time.time()))
+        from pylinks.core import log as _log
+        _log.write("okladki", f"tryb={mode} zadano={len(keys)} "
+                              f"do_pobrania={len(todo)} pobrano={found} "
+                              f"bez_trafienia={missed}")
         return out
 
     @staticmethod
@@ -759,6 +1047,11 @@ class Api:
             _store.set_crop(CACHE_DIR, key, entry.get("fit", "pad"),
                             float(entry.get("offset", 0.5)))
 
+    @staticmethod
+    def _forget_miss(key: str, mode: str) -> None:
+        """Zapomina „tu nic nie ma" — po ręcznym wyborze albo udanym pobraniu."""
+        _store.set_override(CACHE_DIR, key, f"cover_miss_{art._mode(mode)}", None)
+
     def fetch_cover(self, key: str, mode: str = "icon") -> dict:
         """Pobiera grafikę z SGDB (lub czyta z cache) dla trybu. Kształt robi CSS."""
         g = self._find_game(key)
@@ -778,14 +1071,19 @@ class Api:
                               query=override)
         if res.get("found"):
             self._invalidate(key)               # świeżo pobrany raw
+            self._forget_miss(key, mode)
             fit, off = self._crop_for(key, cfg)
             res["fit"], res["offset"] = fit, off
         return res
 
-    def _all_candidates(self, cfg: dict, g: dict, query: str, mode: str) -> list:
-        """SteamGridDB + źródła dodatkowe (IGDB / TGDB / SteamCDN / Libretro)."""
-        cands = art.candidates_for_game(cfg, g, query=query, mode=mode)
-        if mode != "steam" and not query:
+    def _all_candidates(self, cfg: dict, g: dict, query: str, mode: str,
+                        page: int = 0) -> list:
+        """SteamGridDB + źródła dodatkowe (IGDB / TGDB / SteamCDN / Libretro).
+
+        `page` > 0 = kolejna porcja z SGDB („pokaż więcej"); źródła dodatkowe
+        dokładamy tylko na pierwszej stronie — one nie mają stronicowania."""
+        cands = art.candidates_for_game(cfg, g, query=query, mode=mode, page=page)
+        if mode != "steam" and not query and not page:
             try:
                 seen = {c["id"] for c in cands}
                 if g.get("source") == "rom":
@@ -835,7 +1133,8 @@ class Api:
             pass
         return False
 
-    def cover_candidates(self, key: str, query: str = "", mode: str = "icon") -> dict:
+    def cover_candidates(self, key: str, query: str = "", mode: str = "icon",
+                         page: int = 0) -> dict:
         """Lista kandydatów do okna wyboru (miniatury jako data-URI) dla trybu.
 
         Poza SteamGridDB dołącza dodatkowe źródła (IGDB / TheGamesDB / Steam CDN),
@@ -848,8 +1147,8 @@ class Api:
             self._pending[key] = query.strip()          # ręczne — zapamiętaj tymczasowo
         else:
             query = self._title_override(key, cfg)       # użyj zapisanego dopasowania
-        cands = self._all_candidates(cfg, g, query, mode)
-        return {"key": key, "candidates": cands,
+        cands = self._all_candidates(cfg, g, query, mode, page=int(page or 0))
+        return {"key": key, "candidates": cands, "page": int(page or 0),
                 "reason": "" if cands else "brak wyników / brak klucza SGDB"}
 
     def fetch_thumb(self, url: str) -> dict:
@@ -878,24 +1177,9 @@ class Api:
                 "data_uri": res.get("data_uri"),
                 "fit": res.get("fit"), "offset": res.get("offset")}
 
-    def reset_cover(self, key: str, mode: str = "icon") -> dict:
-        """Przywraca automatyczną grafikę trybu: usuwa wybór + pobiera na nowo."""
-        art.clear_cover(CACHE_DIR, key, mode)
-        self._save_selection(key, None, mode)
-        self._invalidate(key)
-        g = self._find_game(key)
-        if not g:
-            return {"key": key, "found": False, "data_uri": None}
-        cfg = _load_config()
-        res = art.fetch_cover(cfg, CACHE_DIR, key, g, mode)
-        if res.get("found"):
-            self._invalidate(key)
-            fit, off = self._crop_for(key, cfg)
-            res["fit"], res["offset"] = fit, off
-        return res
 
     # --- tryb Steam: kilka typów grafik (grid + hero/tło + logo) ---
-    def steam_art_options(self, key: str, query: str = "") -> dict:
+    def steam_art_options(self, key: str, query: str = "", page: int = 0) -> dict:
         """Wszystkie warianty grafik Steam naraz (grid/hero/logo) do okna wyboru."""
         g = self._find_game(key)
         if not g:
@@ -906,7 +1190,8 @@ class Api:
             self._pending[key] = query.strip()
         else:
             query = self._title_override(key, cfg)       # wspólne z trybem ikon
-        res = art.steam_art_options(cfg, g, query=query)
+        res = art.steam_art_options(cfg, g, query=query, page=int(page or 0))
+        res["page"] = int(page or 0)
         # bieżące wybory jako URL-e (do podświetlenia wariantu w UI)
         store = cfg.get("steam_art_by_key", {}) or {}
         entry = store.get(key, {}) if isinstance(store, dict) else {}
@@ -932,11 +1217,6 @@ class Api:
         return {"key": key, "asset": asset, "found": True,
                 "data_uri": thumb or res.get("data_uri")}
 
-    def reset_steam_asset(self, key: str, asset: str) -> dict:
-        """Usuwa wybrany wariant danego typu (reset)."""
-        art.clear_steam_asset(CACHE_DIR, key, asset)
-        self._save_steam_asset_sel(key, asset, None)
-        return {"key": key, "asset": asset, "ok": True}
 
     # --- zadania w tle: pobierz wszystko / stwórz wszystko ---
     def _games_for_scope(self, scope: str) -> list:
@@ -1123,6 +1403,7 @@ class Api:
             _store.clear_choice(CACHE_DIR, key, m, asset)
         else:
             _store.set_choice(CACHE_DIR, key, m, asset, url=url)
+            self._forget_miss(key, m)   # ręczny wybór unieważnia „tu nic nie ma"
 
     # --- tryb dopasowania ikony (kwadrat): "pad" | "crop" ---
     def get_fit_mode(self) -> str:
@@ -1286,10 +1567,520 @@ class Api:
             pass
         return out
 
+    # --- biblioteka arcade (MAME) ---
+    def mame_status(self) -> dict:
+        """Stan biblioteki: wersja MAME, czy metadane w cache, ile tytułów."""
+        from pylinks.services import mame as _m
+        cfg = _load_config()
+        a = cfg.get("arcade_library", {}) or {}
+        exe, lib = a.get("mame_exe", ""), a.get("lib_dir", "")
+        cached = _m.cached_version(CACHE_DIR)
+        live = _m.mame_version(exe) if exe else ""
+        titles = len(_m.library_titles(CACHE_DIR, lib)) if (lib and cached) else 0
+        return {"enabled": bool(a.get("enabled")), "mame_exe": exe,
+                "lib_dir": lib, "roms_dir": a.get("roms_dir", ""),
+                "mame_version": live, "cached_version": cached,
+                "needs_refresh": bool(live and live != cached),
+                "titles": titles,
+                "lib_present": bool(lib and Path(lib).is_dir())}
+
+    def mame_refresh(self) -> dict:
+        """Wczytuje metadane z mame.exe do bazy (szybkie: ~1 s dla 50 tys. setów)."""
+        from pylinks.services import mame as _m
+        a = (_load_config().get("arcade_library", {}) or {})
+        exe = a.get("mame_exe", "")
+        if not exe:
+            return {"ok": False, "reason": "nie wskazano mame.exe"}
+        return _m.refresh_metadata(CACHE_DIR, exe,
+                                   support_dir=a.get("support_dir", ""))
+
+    def mame_library(self, limit: int = 0, skip_controls: bool = True,
+                     skip_adult: bool = True, skip_extra_ctrl: list = None) -> list:
+        """Biblioteka pogrupowana po TYTULE (docelowo wybiera się jedną wersję).
+
+        Domyślnie odsiewa hazard, mahjong/hanafuda, spinner i treści dla dorosłych.
+        `skip_extra_ctrl` pozwala dodatkowo wyciąć kierownice/trackballe/pistolety.
+        """
+        from pylinks.services import mame as _m
+        cfg = _load_config()
+        a = (cfg.get("arcade_library", {}) or {})
+        lib = a.get("lib_dir", "")
+        skip_g = a.get("skip_genres")
+        groups = _m.library_titles(CACHE_DIR, lib, limit=limit,
+                                   skip_controls=skip_controls, skip_adult=skip_adult,
+                                   skip_extra_ctrl=tuple(skip_extra_ctrl or ()),
+                                   skip_genres=skip_g,
+                                   skip_cats=a.get("skip_cats"))
+        # trzymamy je jako „gry" — dzięki temu okładki, kadrowanie i wybór grafiki
+        # działają dokładnie tak samo jak dla reszty biblioteki
+        chosen_map = _store.all_overrides(CACHE_DIR, "mame_set")
+        self._stem_index = None
+        self._set_to_group = None
+        self._mame_games = [{
+            "name": g["title"], "source": "mame", "system": "MAME",
+            "set": g["name"], "genre": g.get("genre", ""),
+            "maker": g.get("maker", ""), "clean": _m.clean_title(g["title"]),
+            "cat": g.get("cat", ""), "sub": g.get("sub", ""),
+            "chosen": chosen_map.get(f"mame::{g['name'].lower()}") or g["name"],
+            "path": str(Path(lib) / (g["name"] + ".zip")) if lib else "",
+            "variants": g["variants"],
+        } for g in groups]
+        return [{"key": _game_key(x), "name": x["name"], "set": x["set"],
+                 "system": "MAME", "genre": x["genre"], "chosen": x["chosen"],
+                 "cat": x["cat"], "sub": x["sub"],
+                 "variants": x["variants"]} for x in self._mame_games]
+
+    def mame_recover_covers(self) -> dict:
+        """Kasuje AUTOMATYCZNIE dobrane okładki arcade, by pobrały się na nowo.
+
+        Dopasowanie SGDB dla automatów rozróżnia teraz producenta („Tetris (Sega)"),
+        ale wcześniej trafione okładki siedzą w cache i same się nie odświeżą.
+        Grafiki WYBRANE RĘCZNIE zostają — poznajemy je po wpisie w bazie wyborów.
+        """
+        # Odświeżamy przy okazji spis Libretro — to on decyduje o większości
+        # trafień dla automatów, a jest ważny miesiąc.
+        try:
+            from pylinks.services import libretro_mame as _lm
+            _lm.refresh_index(CACHE_DIR, force=True)
+        except Exception:
+            pass
+        manual = set(_store.all_choices(CACHE_DIR))
+        removed = 0
+        # Pamięć nietrafień też musi zniknąć — inaczej odświeżenie skasowałoby
+        # pliki, a program i tak nie spróbowałby pobrać ich ponownie.
+        forgotten = 0
+        for kind in ("cover_miss_icon", "cover_miss_steam"):
+            for k in _store.all_overrides(CACHE_DIR, kind):
+                if k.startswith("mame::"):
+                    _store.set_override(CACHE_DIR, k, kind, None)
+                    forgotten += 1
+        for mode in ("icon", "steam"):
+            d = CACHE_DIR / "covers" / mode
+            if not d.is_dir():
+                continue
+            for f in d.iterdir():
+                if not f.name.startswith("mame_") or not f.is_file():
+                    continue
+                key = "mame::" + f.stem.split("__")[0][len("mame_"):]
+                if key in manual:
+                    continue
+                try:
+                    f.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+        return {"ok": True, "removed": removed, "kept_manual": len(manual),
+                "forgotten": forgotten}
+
+    def log_js(self, level: str, msg: str) -> dict:
+        """Wpis z warstwy przeglądarki. Bez tego błędy JS ginęły bezpowrotnie:
+        WebView2 nie ma widocznej konsoli, a okno diagnostyczne bywa wyłączone."""
+        from pylinks.core import log as _log
+        _log.write("js/" + (level or "log")[:8], str(msg)[:2000])
+        return {"ok": True}
+
+    def get_log(self, lines: int = 300) -> dict:
+        """Ostatnie wiersze dziennika + jego ścieżka (do podejrzenia w oknie)."""
+        from pylinks.core import log as _log
+        return {"path": _log.path(), "text": _log.tail(lines)}
+
+    def clear_log(self) -> dict:
+        """Czyści dziennik — żeby po odtworzeniu problemu zostały same świeże wpisy."""
+        from pylinks.core import log as _log
+        try:
+            Path(_log.path()).write_text("", encoding="utf-8")
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "reason": str(e)}
+
+    def open_log_dir(self) -> dict:
+        """Pokazuje dziennik w Eksploratorze — szybciej niż dyktowanie ścieżki."""
+        import subprocess
+        from pylinks.core import log as _log
+        pth = Path(_log.path())
+        try:
+            if pth.is_file():
+                subprocess.Popen(["explorer", "/select,", str(pth)])
+            else:
+                subprocess.Popen(["explorer", str(pth.parent)])
+            return {"ok": True, "path": str(pth)}
+        except Exception as e:
+            return {"ok": False, "reason": str(e)}
+
+    def mame_categories(self) -> dict:
+        """Drzewo kategorii z catver.ini dla gier OBECNYCH w bibliotece.
+
+        catver.ini opisuje sety łańcuchem „Kategoria / Podkategoria" i sam
+        oznacza treści dla dorosłych („* Mature *"). To dwupoziomowe drzewo
+        zastępuje płaską listę gatunków — jest dokładniejsze i pełne (100 %).
+        """
+        from pylinks.services import mame as _m
+        cfg = _load_config()
+        a = (cfg.get("arcade_library", {}) or {})
+        lib = a.get("lib_dir", "")
+        tree = _m.category_tree(CACHE_DIR, lib) if lib else {}
+        return {"tree": tree, "skip": list(a.get("skip_cats") or []),
+                "total": sum(e["titles"] for e in tree.values())}
+
+    def mame_set_categories(self, skip: list) -> dict:
+        """Zapisuje wyłączone gałęzie („Shooter" albo „Shooter / Gallery")."""
+        cfg = _load_config()
+        a = dict(cfg.get("arcade_library", {}) or {})
+        a["skip_cats"] = sorted({str(x) for x in (skip or []) if x})
+        return self.save_config({"arcade_library": a})
+
+    def mame_genres(self) -> list:
+        """Gatunki obecne w bibliotece + liczba tytułów (do filtrów w interfejsie)."""
+        from pylinks.services import mame as _m
+        a = (_load_config().get("arcade_library", {}) or {})
+        return _m.library_genres(CACHE_DIR, a.get("lib_dir", ""))
+
+    @staticmethod
+    def _lnk_set(path) -> str:
+        """Nazwa zestawu, do której celuje istniejący skrót.
+
+        Argumenty to `-rompath "…" <set>`, więc bierzemy OSTATNI człon — porównanie
+        całego łańcucha zawsze byłoby różne i wykrywanie kolizji nazw przestałoby
+        działać (a przy okazji: starsze skróty mają sam set, co też tu wchodzi).
+
+        COM inicjalizujemy TUTAJ, a nie liczymy na stan wątku: przy pustym wyniku
+        wykrywanie kolizji nazw milcząco przepuszczało nadpisanie cudzego skrótu.
+        """
+        try:
+            import pythoncom, win32com.client  # type: ignore
+        except Exception:
+            return ""
+        co = False
+        try:
+            pythoncom.CoInitialize()
+            co = True
+        except Exception:
+            pass
+        try:
+            sh = win32com.client.Dispatch("WScript.Shell")
+            raw = (sh.CreateShortcut(str(path)).Arguments or "").strip()
+            return raw.rsplit(None, 1)[-1] if raw else ""
+        except Exception:
+            return ""
+        finally:
+            if co:
+                try:
+                    import gc
+                    gc.collect()
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
+
+    def mame_set_version(self, key: str, setname: str) -> dict:
+        """Zapamiętuje, KTÓRA wersja tytułu jest wybrana (trwale, w bazie)."""
+        if not key or not setname:
+            return {"ok": False}
+        _store.set_override(CACHE_DIR, key, "mame_set", setname)
+        for g in self._mame_games:
+            if _game_key(g) == key:
+                g["chosen"] = setname
+                break
+        return {"ok": True, "key": key, "set": setname}
+
+    def mame_verify(self, sets: list) -> dict:
+        """Czy wskazane wersje da się URUCHOMIĆ z biblioteki (BIOS/rodzic/urządzenia)."""
+        from pylinks.services import mame as _m
+        a = (_load_config().get("arcade_library", {}) or {})
+        exe, lib = a.get("mame_exe", ""), a.get("lib_dir", "")
+        if not exe or not lib:
+            return {}
+        return _m.verify(exe, lib, *[s for s in (sets or []) if s])
+
+    def mame_export(self, sets: list, make_shortcuts: bool = True) -> dict:
+        """Eksportuje WYBRANE wersje do katalogu do grania i robi skróty.
+
+        Kolejność jest istotna: najpierw złożenie zestawu, potem `-verifyroms`,
+        a skrót powstaje TYLKO dla wersji, która przeszła weryfikację — żeby nie
+        zostawiać w LINKS pozycji, która i tak się nie uruchomi.
+        Skrót przekazuje `-rompath` jawnie — katalog do grania jest ustawieniem
+        użytkownika i nie musi być domyślnym `roms/` MAME.
+        """
+        import threading
+        from pylinks.services import mame as _m
+        if self._job_busy():
+            return {"started": False, "reason": "zadanie już trwa"}
+        cfg = _load_config()
+        a = cfg.get("arcade_library", {}) or {}
+        exe, lib, roms = a.get("mame_exe", ""), a.get("lib_dir", ""), a.get("roms_dir", "")
+        if not (exe and lib and roms):
+            return {"started": False,
+                    "reason": "ustaw mame.exe, bibliotekę i katalog do grania"}
+        wanted = [x for x in (sets or []) if x]
+        if not wanted:
+            return {"started": False, "reason": "nie wskazano wersji"}
+        self._job_reset("mame", len(wanted))
+
+        def _worker():
+            from pylinks.services import export as _exp
+            from pylinks.core.naming import safe_name
+            from pylinks.core import log as _log
+            _log.write("mame", f"eksport {len(wanted)} zestawow -> {roms}")
+            try:
+                import pythoncom
+                pythoncom.CoInitialize()
+            except Exception:
+                pythoncom = None
+            creator = _exp.ShortcutCreator("")
+            out_dir = LINKS_DIR / "MAME"
+            icons_dir = CACHE_DIR / "icons"
+            done, ok, failed = 0, [], []
+            for st in wanted:
+                if self._job.get("cancel"):
+                    break
+                self._job["current"] = st
+                try:
+                    r = _m.export_set(CACHE_DIR, lib, roms, exe, st,
+                                      progress=lambda m: self._job.update({"phase": m}))
+                except Exception as ex:
+                    r = {"ok": False, "reason": str(ex)}
+                if r.get("ok"):
+                    ok.append(st)
+                    if make_shortcuts:
+                        # W interfejsie pokazujemy pełny opis (z wersją), ale PLIK
+                        # skrótu ma nosić samą nazwę gry — bez nawiasu z regionem.
+                        g = next((x for x in self._mame_games
+                                  if st in [v["name"] for v in x.get("variants", [])]
+                                  or x.get("set") == st), None)
+                        title = st
+                        for v in (g or {}).get("variants", []):
+                            if v["name"] == st:
+                                title = v["title"]
+                                break
+                        else:
+                            title = (g or {}).get("name") or st
+                        full_title = title
+                        title = _m.clean_title(title)
+                        # Klucz grafiki należy do GRUPY tytułu, nie do wybranego
+                        # wariantu: siatka pobiera okładkę pod `mame::<set grupy>`,
+                        # więc szukanie jej pod `mame::<klon>` zawsze chybiało.
+                        # Stąd ikonę miały tylko te skróty, gdzie wybrana wersja
+                        # była zarazem setem nadrzędnym (baddudes, mk, tekken).
+                        key = f"mame::{((g or {}).get('set') or st).lower()}"
+                        ico_path = ""
+                        try:
+                            # Ikona powstaje z OKŁADKI w cache. Przy eksporcie
+                            # arcade zwykle jej jeszcze nie ma — użytkownik nie
+                            # klikał „Pobierz", a bez tego skrót wychodził z gołą
+                            # ikoną MAME. Dociągamy ją tutaj, raz, na żądanie.
+                            from pylinks.services import art as _art
+                            if not _art.has_cover(CACHE_DIR, key, "icon"):
+                                _art.fetch_cover(cfg, CACHE_DIR, key, g or {}, "icon")
+                            fit, off = self._crop_for(key, cfg)
+                            data = _exp.bake_ico(CACHE_DIR, key, fit, off,
+                                                 **_exp.bake_args(cfg, g or {}))
+                            if data:
+                                ico_path = _exp.write_cache_ico(icons_dir, key, data)
+                            else:
+                                _log.write("mame", f"{st}: skrót bez ikony — "
+                                                   f"brak okładki dla {title}")
+                        except Exception as ex:
+                            ico_path = ""
+                            _log.write("mame", f"{st}: ikona nieudana: {ex}")
+                        try:
+                            out_dir.mkdir(parents=True, exist_ok=True)
+                            nm = safe_name(title)
+                            dst = out_dir / f"{nm}.lnk"
+                            # Ta sama oczyszczona nazwa bywa zajęta przez INNĄ grę:
+                            # „Tetris" to 7 osobnych automatów, a „Trivial Pursuit"
+                            # 9 edycji. Wtedy wracamy do PEŁNEGO tytułu — nawias
+                            # niesie wtedy sens („Genus II Edition"), w odróżnieniu
+                            # od nazwy zestawu, która nic nie mówi.
+                            if dst.exists() and self._lnk_set(dst) not in ("", st):
+                                dst = out_dir / f"{safe_name(full_title)}.lnk"
+                                if dst.exists() and self._lnk_set(dst) not in ("", st):
+                                    dst = out_dir / f"{safe_name(full_title)} ({st}).lnk"
+                            # -rompath MUSI być w skrócie. Wcześniej szedł sam
+                            # set, przy założeniu że katalog do grania jest
+                            # domyślnym `roms` MAME — a on jest konfigurowalny
+                            # i u użytkownika wskazuje gdzie indziej. Efekt:
+                            # `-verifyroms` (który rompath dostaje) przechodził,
+                            # skrót powstawał, a gra kończyła się „NOT FOUND".
+                            args = '-rompath "%s" %s' % (roms, st)
+                            creator.make_lnk(str(dst), exe, args,
+                                             ico_path, str(Path(exe).parent))
+                        except Exception:
+                            pass
+                else:
+                    failed.append({"set": st, "reason": r.get("reason", "")})
+                done += 1
+                self._job["done"] = done
+            if pythoncom is not None:
+                try:
+                    import gc
+                    gc.collect()
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
+            self._job["running"] = False
+            self._job["current"] = ""
+            self._job["phase"] = ""
+            self._job["result"] = {"kind": "mame", "ok": len(ok),
+                                   "failed": failed, "sets": ok}
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return {"started": True, "total": len(wanted)}
+
+    def test_apis(self) -> dict:
+        """Sprawdza WSZYSTKIE używane API naraz → {nazwa: {ok, info}}."""
+        return {"sgdb": self.test_sgdb(), "steam": self.test_steam_api(),
+                "igdb": self.test_igdb(), "tgdb": self.test_tgdb(),
+                "screenscraper": self.test_screenscraper(),
+                "libretro": self.test_libretro(), "logos": self.test_logos_repo()}
+
+    def test_screenscraper(self) -> dict:
+        """ScreenScraper.fr — wymaga danych DEWELOPERA, nie tylko konta usera."""
+        from pylinks.services.screenscraper import ScreenScraper
+        e = (_load_config().get("extra_sources", {}) or {})
+        ss = ScreenScraper(e.get("ss_devid", ""), e.get("ss_devpassword", ""),
+                           e.get("ss_user", ""), e.get("ss_password", ""))
+        if not ss.ok:
+            return {"ok": False, "reason": "brak devid/devpassword — samo konto "
+                                           "użytkownika API odrzuca"}
+        q = ss.user_quota()
+        if not q.get("ok"):
+            return {"ok": False, "reason": q.get("reason") or "odrzucone"}
+        return {"ok": True, "info": f"{q.get('today', '?')}/{q.get('max_day', '?')} "
+                                    f"zapytań dziś, {q.get('threads', '?')} wątków"}
+
+    def test_steam_api(self) -> dict:
+        """Steam Web API — klucz + SteamID64 (lista posiadanych gier)."""
+        import urllib.request
+        cfg = _load_config()
+        ak = cfg.get("api_keys", {}) or {}
+        key, sid = (ak.get("steam_api_key") or ""), (ak.get("steam_id64") or "")
+        if not key:
+            return {"ok": False, "reason": "brak klucza"}
+        if not sid:
+            return {"ok": False, "reason": "brak SteamID64"}
+        url = (f"https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/"
+               f"?key={key}&steamid={sid}&format=json")
+        try:
+            with urllib.request.urlopen(urllib.request.Request(
+                    url, headers={"User-Agent": "Mozilla/5.0"}), timeout=15) as r:
+                data = json.loads(r.read()).get("response", {})
+        except Exception as e:
+            code = getattr(e, "code", None)
+            if code == 403:
+                return {"ok": False, "reason": "klucz odrzucony (403)"}
+            return {"ok": False, "reason": f"{type(e).__name__}"}
+        if "games" not in data and not data.get("game_count"):
+            return {"ok": False, "reason": "brak danych — sprawdź SteamID64 "
+                                           "albo prywatność profilu"}
+        return {"ok": True, "info": f"{data.get('game_count', 0)} gier"}
+
+    def test_igdb(self) -> dict:
+        """IGDB — token Twitch (client id + secret) i próbne zapytanie."""
+        import urllib.request
+        cfg = _load_config()
+        es = cfg.get("extra_sources", {}) or {}
+        cid, sec = (es.get("igdb_client_id") or ""), (es.get("igdb_client_secret") or "")
+        if not cid or not sec:
+            return {"ok": False, "reason": "brak Client ID / Secret"}
+        url = (f"https://id.twitch.tv/oauth2/token?client_id={cid}"
+               f"&client_secret={sec}&grant_type=client_credentials")
+        try:
+            with urllib.request.urlopen(
+                    urllib.request.Request(url, method="POST"), timeout=15) as r:
+                json.loads(r.read())
+        except Exception as e:
+            code = getattr(e, "code", None)
+            try:
+                msg = json.loads(e.read()).get("message", "")   # type: ignore
+            except Exception:
+                msg = ""
+            if code == 403:
+                return {"ok": False, "reason": msg or "nieprawidłowy Client Secret"}
+            if code == 400:
+                return {"ok": False, "reason": msg or "nieprawidłowy Client ID"}
+            return {"ok": False, "reason": f"{type(e).__name__}"}
+        from pylinks.services.extra_art import ExtraArtSources
+        x = ExtraArtSources(cfg)
+        n = len(x.igdb_candidates("Celeste", "PC", limit=4)) if es.get("igdb") else 0
+        return {"ok": True, "info": (f"token OK, {n} grafik testowo"
+                                     if es.get("igdb") else "token OK (źródło wyłączone)")}
+
+    def test_tgdb(self) -> dict:
+        """TheGamesDB — klucz API (próbne wyszukanie)."""
+        import urllib.request
+        es = (_load_config().get("extra_sources", {}) or {})
+        key = es.get("tgdb_key") or ""
+        if not key:
+            return {"ok": False, "reason": "brak klucza"}
+        url = (f"https://api.thegamesdb.net/v1/Games/ByGameName"
+               f"?apikey={key}&name=celeste&fields=overview")
+        try:
+            with urllib.request.urlopen(urllib.request.Request(
+                    url, headers={"User-Agent": "Mozilla/5.0"}), timeout=15) as r:
+                resp = json.loads(r.read())
+        except Exception as e:
+            code = getattr(e, "code", None)
+            body = {}
+            try:
+                body = json.loads(e.read())                     # type: ignore
+            except Exception:
+                pass
+            if code in (401, 403):
+                return {"ok": False, "reason": "klucz odrzucony"}
+            if code == 429:
+                # TGDB ma limit MIESIĘCZNY — klucz jest dobry, tylko wyczerpany
+                hrs = int((body.get("allowance_refresh_timer") or 0) / 3600)
+                return {"ok": False,
+                        "reason": f"wyczerpany limit miesięczny (odnowa za ~{hrs} h)"}
+            return {"ok": False, "reason": f"{type(e).__name__}"}
+        if resp.get("code") != 200:
+            return {"ok": False, "reason": resp.get("status") or "odpowiedź != 200"}
+        rem = (resp.get("remaining_monthly_allowance")
+               if "remaining_monthly_allowance" in resp else None)
+        info = f"{len(resp.get('data', {}).get('games', []))} wyników"
+        if rem is not None:
+            info += f", limit miesięczny: {rem}"
+        return {"ok": True, "info": info}
+
+    def test_libretro(self) -> dict:
+        """Libretro thumbnails — repozytorium bez klucza (+ indeks MAME)."""
+        from pylinks.services.extra_art import libretro_candidates
+        from pylinks.services import libretro_mame as _lm
+        try:
+            n = len(libretro_candidates("PS1", "Tekken 3"))
+        except Exception as e:
+            return {"ok": False, "reason": f"{type(e).__name__}"}
+        idx = _lm.refresh_index(CACHE_DIR)
+        extra = (f", indeks arcade: {idx.get('titles', 0)} tytułów"
+                 if idx.get("ok") else f", indeks arcade: {idx.get('reason', 'błąd')}")
+        return {"ok": n > 0,
+                "info": (f"{n} kandydatów" if n else "brak trafień") + extra}
+
+    def test_logos_repo(self) -> dict:
+        """Repozytorium logotypów platform (console-logos, bez klucza)."""
+        import urllib.request
+        from pylinks.services import spine_logos as _sl
+        style = _load_config().get("spine_logo_style", "Light - Color")
+        path = urllib.request.quote(f"{_sl._CLOGOS_FULLSET}/{style}/Consoles", safe="/")
+        try:
+            with urllib.request.urlopen(urllib.request.Request(
+                    _sl._CLOGOS_API + path,
+                    headers={"User-Agent": "Mozilla/5.0"}), timeout=20) as r:
+                arr = json.loads(r.read())
+        except Exception as e:
+            code = getattr(e, "code", None)
+            if code == 403:
+                return {"ok": False, "reason": "limit zapytań GitHub (spróbuj później)"}
+            return {"ok": False, "reason": f"{type(e).__name__}"}
+        n = len(arr) if isinstance(arr, list) else 0
+        return {"ok": n > 0, "info": f"{n} plików w „Consoles”"}
+
     def test_sgdb(self) -> dict:
-        """Sprawdza klucz SGDB (tanie zapytanie)."""
+        """SteamGridDB — klucz API (tanie zapytanie)."""
         from pylinks.services.art import SgdbClient
         cli = SgdbClient((_load_config().get("api_keys", {}) or {}).get("sgdb_key", ""))
         if not cli.ok:
             return {"ok": False, "reason": "brak klucza"}
-        return {"ok": bool(cli.search("celeste", 3))}
+        res = cli.search("celeste", 3)
+        if not res:
+            return {"ok": False, "reason": "brak odpowiedzi — zły klucz lub brak sieci"}
+        return {"ok": True, "info": f"{len(res)} wyników"}

@@ -89,8 +89,19 @@ def _default_config() -> dict:
                  "primary_ext": "m3u,cue,iso,chd,bin"},
             ],
         },
+        # Biblioteka arcade (MAME): duża kolekcja na osobnym dysku, z której
+        # wybiera się POJEDYNCZE wersje i eksportuje do roms_dir.
+        "arcade_library": {
+            "enabled":  False,
+            "lib_dir":  "",      # biblioteka (split) — może być odpięta
+            "mame_exe": "",      # źródło metadanych i weryfikacji
+            "roms_dir": "",      # katalog do grania (samowystarczalny)
+            "support_dir": "",   # catver.ini / mature.ini (gatunki i „mature")
+        },
         "last_run_errors": {},
         "extra_sources": {
+            # maks. grafik z KAŻDEGO źródła bez stronicowania (IGDB/TGDB)
+            "max_per_source": 12,
             "steam_cdn":            True,
             "libretro":             True,
             "igdb":                 False,

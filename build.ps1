@@ -1,4 +1,4 @@
-# build.ps1 — buduje przenośny PyLinksWeb.exe (PyInstaller, onefile).
+﻿# build.ps1 — buduje przenośny PyLinksWeb.exe (PyInstaller, onefile).
 # Użycie:  powershell -ExecutionPolicy Bypass -File build.ps1
 # Wynik:   dist\PyLinksWeb.exe  (portable — config/Cache/LINKS powstają obok exe)
 
