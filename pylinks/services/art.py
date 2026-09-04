@@ -118,11 +118,12 @@ class SgdbClient:
                 return res
         return []
 
-    def _grids(self, path: str, per_page: int, dims: str = _PORTRAIT_DIMS) -> list[dict]:
+    def _grids(self, path: str, per_page: int, dims: str = _PORTRAIT_DIMS,
+               page: int = 0) -> list[dict]:
         url = f"{self.BASE}/{path}?"
         if dims:
             url += f"dimensions={dims}&"
-        url += f"limit={per_page}&page=0"
+        url += f"limit={per_page}&page={max(0, int(page))}"
         d = fetch_api(url, hdrs=self._hdr())
         if not d:
             return []
@@ -132,17 +133,20 @@ class SgdbClient:
         except Exception:
             return []
 
-    def grids_for_id(self, sgdb_id, per_page: int = 8, dims: str = _PORTRAIT_DIMS) -> list[dict]:
-        return self._grids(f"grids/game/{sgdb_id}", per_page, dims)
+    def grids_for_id(self, sgdb_id, per_page: int = 8, dims: str = _PORTRAIT_DIMS,
+                     page: int = 0) -> list[dict]:
+        return self._grids(f"grids/game/{sgdb_id}", per_page, dims, page)
 
-    def grids_for_appid(self, appid, per_page: int = 8, dims: str = _PORTRAIT_DIMS) -> list[dict]:
-        return self._grids(f"grids/steam/{appid}", per_page, dims)
+    def grids_for_appid(self, appid, per_page: int = 8, dims: str = _PORTRAIT_DIMS,
+                        page: int = 0) -> list[dict]:
+        return self._grids(f"grids/steam/{appid}", per_page, dims, page)
 
-    def _icons(self, path: str, per_page: int = 50) -> list[dict]:
+    def _icons(self, path: str, per_page: int = 50, page: int = 0) -> list[dict]:
         """Endpoint ikon/hero/logo SGDB. Dokłada limit+page (bez tego API zwraca
         garstkę — hero/logo miały „jedno-dwa", mimo że na stronie jest więcej)."""
         sep = "&" if "?" in path else "?"
-        url = f"{self.BASE}/{path}{sep}limit={max(1, min(50, per_page))}&page=0"
+        url = (f"{self.BASE}/{path}{sep}limit={max(1, min(50, per_page))}"
+               f"&page={max(0, int(page))}")
         d = fetch_api(url, hdrs=self._hdr())
         if not d:
             return []
@@ -152,26 +156,26 @@ class SgdbClient:
         except Exception:
             return []
 
-    def icons_for_id(self, sgdb_id, per_page: int = 50) -> list[dict]:
-        return self._icons(f"icons/game/{sgdb_id}", per_page)
+    def icons_for_id(self, sgdb_id, per_page: int = 50, page: int = 0) -> list[dict]:
+        return self._icons(f"icons/game/{sgdb_id}", per_page, page)
 
-    def icons_for_appid(self, appid, per_page: int = 50) -> list[dict]:
-        return self._icons(f"icons/steam/{appid}", per_page)
+    def icons_for_appid(self, appid, per_page: int = 50, page: int = 0) -> list[dict]:
+        return self._icons(f"icons/steam/{appid}", per_page, page)
 
     # heroes (tło/banner) i logos (przezroczyste logo) — do trybu Steam
     def heroes_for_id(self, sgdb_id, per_page: int = 50,
-                      types: str = "static,animated") -> list[dict]:
-        return self._icons(f"heroes/game/{sgdb_id}?types={types}", per_page)
+                      types: str = "static,animated", page: int = 0) -> list[dict]:
+        return self._icons(f"heroes/game/{sgdb_id}?types={types}", per_page, page)
 
     def heroes_for_appid(self, appid, per_page: int = 50,
-                         types: str = "static,animated") -> list[dict]:
-        return self._icons(f"heroes/steam/{appid}?types={types}", per_page)
+                         types: str = "static,animated", page: int = 0) -> list[dict]:
+        return self._icons(f"heroes/steam/{appid}?types={types}", per_page, page)
 
-    def logos_for_id(self, sgdb_id, per_page: int = 50) -> list[dict]:
-        return self._icons(f"logos/game/{sgdb_id}", per_page)
+    def logos_for_id(self, sgdb_id, per_page: int = 50, page: int = 0) -> list[dict]:
+        return self._icons(f"logos/game/{sgdb_id}", per_page, page)
 
-    def logos_for_appid(self, appid, per_page: int = 50) -> list[dict]:
-        return self._icons(f"logos/steam/{appid}", per_page)
+    def logos_for_appid(self, appid, per_page: int = 50, page: int = 0) -> list[dict]:
+        return self._icons(f"logos/steam/{appid}", per_page, page)
 
 
 # ── data-URI helpers ───────────────────────────────────────────────────────
@@ -276,13 +280,13 @@ def _covers_dir(cache_dir: Path, mode: str = "icon") -> Path:
 
 def raw_cover(cache_dir: Path, key: str, mode: str = "icon") -> str | None:
     """Zwraca data-URI SUROWEGO obrazu z cache (do okienka kadrowania)."""
-    d = _covers_dir(cache_dir, mode)
-    for f in d.glob(_safe_key(key) + ".*"):
-        try:
-            return _to_data_uri(f.read_bytes())
-        except Exception:
-            return None
-    return None
+    f = _raw_path(cache_dir, key, mode)
+    if not f:
+        return None
+    try:
+        return _to_data_uri(f.read_bytes())
+    except OSError:
+        return None
 
 
 def _saved_choice(cfg: dict, key: str, mode: str = "icon"):
@@ -299,6 +303,185 @@ def _saved_choice(cfg: dict, key: str, mode: str = "icon"):
         url = (cfg.get("selected_icon_keys") or {}).get(key)
     url = url if isinstance(url, str) else None
     return url if (url or "").startswith(("http://", "https://")) else None
+
+
+def _arcade_title_candidates(game: dict) -> list[str]:
+    """Nazwy, pod jakimi automat może figurować w zbiorze Libretro — od najbardziej
+    szczegółowej. Najpierw WYBRANY wariant (jego okładka jest najtrafniejsza),
+    potem tytuł grupy, pozostałe warianty i na końcu nazwa bez nawiasu."""
+    out, chosen = [], (game.get("chosen") or "").lower()
+    vars_ = game.get("variants") or []
+    for v in vars_:
+        if (v.get("name") or "").lower() == chosen and v.get("title"):
+            out.append(v["title"])
+            break
+    for k in ("name", "clean"):
+        if game.get(k):
+            out.append(game[k])
+    out.extend(v["title"] for v in vars_ if v.get("title"))
+    seen, uniq = set(), []
+    for t in out:
+        if t and t not in seen:
+            seen.add(t)
+            uniq.append(t)
+    return uniq
+
+
+def _libretro_arcade_cover(cache_dir: Path, key: str, game: dict,
+                           mode: str) -> dict | None:
+    """Okładka automatu ze zbioru Libretro — dopasowanie po OPISIE Z MAME.
+
+    To źródło pierwszego wyboru dla arcade: plik nazywa się dokładnie tak, jak gra
+    w MAME, więc trafienie jest tożsamością, a nie zgadywaniem. SGDB szuka po
+    tytule i przy krótkich nazwach automatów myli je z grami konsolowymi.
+    """
+    if game.get("source") != "mame":
+        return None
+    from pylinks.services import libretro_mame as _lm
+    try:
+        _lm.refresh_index(cache_dir)          # pobiera raz na miesiąc, potem z dysku
+        urls = _lm.urls_for(cache_dir, _arcade_title_candidates(game))
+    except Exception:
+        return None
+    for url in urls:
+        data = fetch(url, timeout=20)
+        if not data:
+            continue
+        try:
+            out = _covers_dir(cache_dir, mode) / (_safe_key(key) + _ext(_mime(data)))
+            out.write_bytes(data)
+        except Exception:
+            pass
+        return {"key": key, "found": True, "data_uri": _to_data_uri(data),
+                "cached": False, "source": "libretro"}
+    return None
+
+
+def _screenscraper_cover(cfg: dict, cache_dir: Path, key: str, game: dict,
+                         mode: str) -> dict | None:
+    """Okładka automatu ze ScreenScraper — szuka po NAZWIE SETU MAME.
+
+    SGDB indeksuje po tytule, więc automaty o nietypowych nazwach („Cyber Troopers
+    Virtual-On 4", „beatmania IIDX with DDR") zostają bez okładki. ScreenScraper
+    pyta `romnom=<set>.zip`, czyli o rzecz jednoznaczną — stąd tu jako zapas.
+    """
+    e = (cfg.get("extra_sources", {}) or {})
+    if not e.get("screenscraper") or game.get("source") != "mame":
+        return None
+    setname = (game.get("chosen") or game.get("set") or "").strip()
+    if not setname:
+        return None
+    from pylinks.services.screenscraper import ScreenScraper
+    ss = ScreenScraper(e.get("ss_devid", ""), e.get("ss_devpassword", ""),
+                       e.get("ss_user", ""), e.get("ss_password", ""))
+    if not ss.ok:
+        return None
+    # ścieżka wskazuje set RODZICA; dla wybranego wariantu podmieniamy nazwę pliku
+    zip_path = ""
+    base = game.get("path") or ""
+    if base:
+        zip_path = str(Path(base).with_name(setname + ".zip"))
+        if not Path(zip_path).is_file():
+            zip_path = ""
+    jeu = ss.game_by_rom(setname, rom_path=zip_path)
+    if not jeu:
+        return None
+    for url in ss.media_urls(jeu, "box"):
+        data = fetch(url, timeout=20)
+        if not data:
+            continue
+        try:
+            out = _covers_dir(cache_dir, mode) / (_safe_key(key) + _ext(_mime(data)))
+            out.write_bytes(data)
+        except Exception:
+            pass
+        return {"key": key, "found": True, "data_uri": _to_data_uri(data),
+                "cached": False, "source": "screenscraper"}
+    return None
+
+
+# ── miniatury do SIATKI ────────────────────────────────────────────────────
+# Kafelek ma ~200 px, a okładki bywają 600×900 i większe. Przesyłanie ich przez
+# most w pełnej rozdzielczości to ~500 KB na grafikę — przy bibliotece arcade
+# ćwierć giga na jedno przewinięcie. Do WYŚWIETLANIA wystarczy miniatura;
+# pełny obraz zostaje tam, gdzie jest potrzebny: w oknie kadrowania i przy
+# pieczeniu .ico.
+THUMB_BOX = 360
+
+
+def _thumbs_dir(cache_dir: Path, mode: str) -> Path:
+    d = Path(cache_dir) / "thumbs" / _mode(mode)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def clear_thumb(cache_dir: Path, key: str, mode: str = "icon") -> None:
+    """Kasuje miniaturę — po zmianie okładki musi powstać na nowo."""
+    _unlink_all(_thumbs_dir(cache_dir, mode), key)
+
+
+def thumb_path(cache_dir: Path, key: str, mode: str = "icon",
+               box: int = THUMB_BOX):
+    """Plik miniatury (tworzy przy pierwszym użyciu). Bez base64 — do serwera HTTP."""
+    dst = _thumbs_dir(cache_dir, mode) / (_safe_key(key) + ".webp")
+    if dst.is_file():
+        return dst
+    src = _raw_path(cache_dir, key, mode)
+    if not src:
+        return None
+    if not PIL_OK:
+        return src
+    try:
+        with Image.open(src) as im:
+            im.load()
+            if im.mode not in ("RGB", "RGBA"):
+                im = im.convert("RGBA" if "A" in im.getbands() else "RGB")
+            if max(im.size) > box:
+                im.thumbnail((box, box), Image.LANCZOS)
+            buf = BytesIO()
+            im.save(buf, "WEBP", quality=80, method=4)
+        dst.write_bytes(buf.getvalue())
+        return dst
+    except Exception:
+        return src
+
+
+def cover_index(cache_dir: Path, mode: str = "icon") -> dict:
+    """{„bezpieczny klucz": znacznik czasu} dla okładek w cache.
+
+    JEDNO przejście po katalogu zamiast globa na każdy klucz. Znacznik trafia do
+    adresu miniatury, dzięki czemu przeglądarka może trzymać ją w cache bezterminowo,
+    a po podmianie okładki i tak pobierze nową — adres się zmieni.
+    """
+    import os
+    out = {}
+    try:
+        with os.scandir(_covers_dir(cache_dir, mode)) as it:
+            for e in it:
+                if e.is_file():
+                    try:
+                        out[Path(e.name).stem] = int(e.stat().st_mtime)
+                    except OSError:
+                        out[Path(e.name).stem] = 0
+    except OSError:
+        pass
+    return out
+
+
+def thumb_uri(cache_dir: Path, key: str, mode: str = "icon",
+              box: int = THUMB_BOX) -> str | None:
+    """Miniatura jako data-URI — droga awaryjna, gdy nie działa serwer HTTP.
+
+    Skalowanie jest JEDNO, w `thumb_path()`; tutaj dochodzi wyłącznie kodowanie.
+    """
+    f = thumb_path(cache_dir, key, mode, box)
+    if not f:
+        return None
+    try:
+        return _to_data_uri(f.read_bytes())
+    except OSError:
+        return None
+
 
 
 def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict,
@@ -332,15 +515,24 @@ def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict,
             return {"key": key, "found": True, "data_uri": _to_data_uri(data),
                     "cached": False, "restored": True}
 
+    # ARCADE: najpierw źródło dopasowywane TOŻSAMOŚCIOWO (opis z MAME), dopiero
+    # potem SGDB, który przy krótkich nazwach automatów musi zgadywać.
+    if game.get("source") == "mame":
+        alt = _libretro_arcade_cover(cache_dir, key, game, mode)
+        if alt:
+            return alt
+
     sgdb_key = (cfg.get("api_keys", {}) or {}).get("sgdb_key", "")
     client = SgdbClient(sgdb_key)
     if not client.ok:
-        return {"key": key, "found": False, "data_uri": None, "cached": False,
-                "reason": "brak klucza SGDB"}
+        alt = _screenscraper_cover(cfg, cache_dir, key, game, mode)
+        return alt or {"key": key, "found": False, "data_uri": None,
+                       "cached": False, "reason": "brak klucza SGDB"}
 
     ref = _resolve_ref(client, game, query)   # query = nadpisanie tytułu/ID (per gra)
     if not ref:
-        return {"key": key, "found": False, "data_uri": None, "cached": False}
+        alt = _screenscraper_cover(cfg, cache_dir, key, game, mode)
+        return alt or {"key": key, "found": False, "data_uri": None, "cached": False}
     kind_id, val = ref
 
     def _grids(dims):
@@ -356,7 +548,8 @@ def fetch_cover(cfg: dict, cache_dir: Path, key: str, game: dict,
     else:
         grids = _grids(_SQUARE_DIMS) or _icons() or _grids(_STEAM_DIMS)
     if not grids:
-        return {"key": key, "found": False, "data_uri": None, "cached": False}
+        alt = _screenscraper_cover(cfg, cache_dir, key, game, mode)
+        return alt or {"key": key, "found": False, "data_uri": None, "cached": False}
 
     for g in grids:
         url = g.get("thumb") or g.get("url")
@@ -380,14 +573,36 @@ def _safe_key(key: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", key)[:180]
 
 
+def _raw_path(cache_dir: Path, key: str, mode: str = "icon"):
+    """Ścieżka pliku okładki w cache (bez wczytywania zawartości).
+
+    Jedno miejsce, w którym „klucz gry → plik na dysku" jest rozstrzygane;
+    rozszerzenie zależy od tego, co przysłało źródło (png/jpg/webp).
+    """
+    for f in _covers_dir(cache_dir, mode).glob(_safe_key(key) + ".*"):
+        if f.is_file():
+            return f
+    return None
+
+
+def _unlink_all(d: Path, key: str) -> int:
+    """Kasuje wszystkie pliki danego klucza w katalogu (dowolne rozszerzenie)."""
+    n = 0
+    try:
+        for f in d.glob(_safe_key(key) + ".*"):
+            try:
+                f.unlink()
+                n += 1
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return n
+
+
 def clear_cover(cache_dir: Path, key: str, mode: str = "icon") -> None:
     """Usuwa grafikę z cache dyskowego danego trybu (reset do automatycznej)."""
-    d = _covers_dir(cache_dir, mode)
-    for f in d.glob(_safe_key(key) + ".*"):
-        try:
-            f.unlink()
-        except Exception:
-            pass
+    _unlink_all(_covers_dir(cache_dir, mode), key)
 
 
 # ── wybór okładki: kandydaci + zapis ───────────────────────────────────────
@@ -441,6 +656,87 @@ def _pick_best_id(results: list[dict], wanted: str):
     return results[0].get("id")            # 4) fallback: pierwszy
 
 
+def _arcade_titles(title: str) -> list[str]:
+    """Warianty nazwy automatu do odpytania SGDB, od najbardziej dosłownego.
+
+    MAME zapisuje tytuły dwujęzyczne jednym łańcuchem z ukośnikiem —
+    „Sengoku 3 / Sengoku Densho 2001", „Puzzle Bobble / Bust-A-Move" (192 z 4249
+    tytułów w bibliotece). SGDB nie zna takiej formy, więc szukanie całości nie
+    trafiało w nic, choć KAŻDA połowa z osobna trafia bez pudła. Rozbijamy też
+    podtytuł po myślniku („Metal Slug - Super Vehicle-001" → „Metal Slug").
+    """
+    t = (title or "").strip()
+    if not t:
+        return []
+    out = [t]
+    parts = [x.strip() for x in re.split(r"\s+/\s+", t) if x.strip()]
+    if len(parts) > 1:
+        out.extend(parts)
+    for cand in list(out):
+        head = re.split(r"\s+-\s+", cand, maxsplit=1)[0].strip()
+        if head and head != cand:
+            out.append(head)
+    seen, uniq = set(), []
+    for x in out:
+        k = _norm_title(x)
+        if k and k not in seen:
+            seen.add(k)
+            uniq.append(x)
+    return uniq
+
+
+def _arcade_close(cand: str, title: str) -> bool:
+    """Czy wynik SGDB jest DOŚĆ blisko tytułu automatu, by go przyjąć.
+
+    Sporo automatów po prostu nie istnieje w SGDB. Bez tego progu zwykły fallback
+    wciskał pierwszy lepszy wynik — „Sensory Backgammon Computer" dostawało okładkę
+    „Sensory Deprivation", a „Crazy War" → „Crazy Taxi". Dla arcade BRAK okładki
+    jest lepszy niż cudza.
+    """
+    a, b = _norm_title(cand), _norm_title(title)
+    if not a or not b:
+        return False
+    if a == b:                       # „Eight Man" == „Eightman"
+        return True
+    wa = re.findall(r"[a-z0-9]+", (cand or "").lower())
+    wb = re.findall(r"[a-z0-9]+", (title or "").lower())
+    if not wa or not wb:
+        return False
+    if wa[:len(wb)] == wb:           # kandydat = tytuł + podtytuł (na granicy słów)
+        return True
+    if wb[:len(wa)] == wa and len(a) >= 0.7 * len(b):   # skrócony, ale nie ucięty
+        return True
+    return False
+
+
+def _pick_arcade(results: list, title: str, maker: str):
+    """Wybór wpisu SGDB dla gry arcade — z uwzględnieniem PRODUCENTA.
+
+    SGDB nazywa automaty „Tytuł (Producent)", a MAME podaje producenta wprost,
+    więc mamy czym rozstrzygnąć. Kolejność: dokładne „Tytuł (Producent)” →
+    dokładny tytuł → tytuł zawierający producenta → None (wtedy zwykła ścieżka).
+    """
+    if not results:
+        return None
+    tn = _norm_title(title)
+    mk = _norm_title(maker)
+    if mk:
+        want = _norm_title(f"{title} ({maker})")
+        for r in results:
+            if r.get("id") and _norm_title(r.get("name")) == want:
+                return r.get("id")
+        # producent bywa zapisany krócej („Atari Games" vs „Atari”)
+        first = _norm_title(maker.split()[0]) if maker.split() else ""
+        for r in results:
+            nm = _norm_title(r.get("name"))
+            if r.get("id") and nm.startswith(tn) and first and first in nm[len(tn):]:
+                return r.get("id")
+    for r in results:
+        if r.get("id") and _norm_title(r.get("name")) == tn:
+            return r.get("id")
+    return None
+
+
 def _resolve_ref(client: SgdbClient, game: dict, query: str):
     """Ustala co odpytać: ('appid', id) lub ('game', sgdb_id) albo None.
 
@@ -464,6 +760,38 @@ def _resolve_ref(client: SgdbClient, game: dict, query: str):
 
     if query.strip():
         return _find(query.strip())
+
+    # ARCADE (MAME): tytuł ma nawias z regionem („(Europe 940520)"), a SGDB
+    # rozróżnia gry arcade PRODUCENTEM („Alien vs. Predator (Capcom)"). Bez tego
+    # „Alien vs. Predator" trafiało w grę z Game Boya, a „Tetris" w Tetris Ultimate.
+    if game.get("source") == "mame":
+        base = (game.get("clean") or game.get("name") or "").strip()
+        maker = (game.get("maker") or "").strip()
+        for base in _arcade_titles(base):
+            # Najpierw pytamy WPROST o „Tytuł (Producent)". Autouzupełnianie dla
+            # samego „Tetris" zwraca Tetris Ultimate i spółkę — wpisy arcade
+            # („Tetris (Sega)", „Tetris (Atari Games)") w ogóle się tam nie mieszczą.
+            if maker:
+                combo = f"{base} ({maker})"
+                rid = _pick_arcade(client.search(combo, max_results=25), base, maker)
+                if rid:
+                    return ("game", rid)
+                short = maker.split()[0] if maker.split() else ""
+                if short and short.lower() != maker.lower():
+                    rid = _pick_arcade(client.search(f"{base} ({short})", max_results=25),
+                                       base, short)
+                    if rid:
+                        return ("game", rid)
+            res = client.search(base, max_results=25)
+            rid = _pick_arcade(res, base, maker) if res else None
+            if rid:
+                return ("game", rid)
+            # ostatnia szansa: dowolny DOSTATECZNIE bliski wynik; inaczej nic
+            for r in res or ():
+                if r.get("id") and _arcade_close(r.get("name") or "", base):
+                    return ("game", r["id"])
+        return None
+
     appid = game.get("appid")
     if appid:
         return ("appid", appid)
@@ -471,7 +799,8 @@ def _resolve_ref(client: SgdbClient, game: dict, query: str):
 
 
 def candidates_for_game(cfg: dict, game: dict, query: str = "",
-                        mode: str = "icon", limit: int = 40) -> list[dict]:
+                        mode: str = "icon", limit: int = 40,
+                        page: int = 0) -> list[dict]:
     """Kandydaci do okna wyboru IKONY (kwadrat) — jak w oryginale:
     źródło = endpoint /icons + kwadratowe gridy 512/1024, POSORTOWANE MALEJĄCO
     po realnej rozdzielczości (duże pierwsze). Bez plakatów/landscape.
@@ -487,18 +816,20 @@ def candidates_for_game(cfg: dict, game: dict, query: str = "",
     kind_id, val = ref
 
     def _grids(dims):
-        return (client.grids_for_appid(val, per_page=limit, dims=dims)
+        return (client.grids_for_appid(val, per_page=limit, dims=dims, page=page)
                 if kind_id == "appid"
-                else client.grids_for_id(val, per_page=limit, dims=dims))
+                else client.grids_for_id(val, per_page=limit, dims=dims, page=page))
 
     def _icons():
-        return (client.icons_for_appid(val) if kind_id == "appid"
-                else client.icons_for_id(val))
+        return (client.icons_for_appid(val, page=page) if kind_id == "appid"
+                else client.icons_for_id(val, page=page))
 
     # ikony + kwadraty + POSTERY. Każdy rodzaj ma WŁASNĄ pulę. Zwracamy META
     # (URL miniatury), BEZ pobierania — przeglądarka ładuje równolegle z paskiem.
     kind_prio = {"ikona": 0, "kwadrat": 1, "plakat": 2}
-    kind_cap = {"ikona": 30, "kwadrat": 24, "plakat": 24}
+    # przy „pokaż więcej" (page>0) nie przycinamy — chcemy CAŁĄ kolejną porcję
+    kind_cap = ({"ikona": 30, "kwadrat": 24, "plakat": 24} if not page
+                else {"ikona": limit, "kwadrat": limit, "plakat": limit})
     groups = [("ikona", _icons()),
               ("kwadrat", _grids(_SQUARE_DIMS)),
               ("plakat", _grids(_STEAM_DIMS))]
@@ -596,8 +927,7 @@ def cached_steam_asset_thumb(cache_dir: Path, key: str, asset: str,
 def has_cover(cache_dir: Path, key: str, mode: str = "icon") -> bool:
     """TANIA kontrola obecności okładki w cache — sam glob, bez czytania pliku,
     PIL-a i base64 (wcześniej robiło to pełne dekodowanie miniatury)."""
-    d = _covers_dir(cache_dir, mode)
-    return any(True for _ in d.glob(_safe_key(key) + ".*"))
+    return _raw_path(cache_dir, key, mode) is not None
 
 
 _HERO_TARGET_W = 1920          # kanoniczna szerokość tła w bibliotece Steam
@@ -677,7 +1007,7 @@ def prefetch_steam_art_for_game(cfg: dict, cache_dir: Path, key: str, game: dict
 
 
 def steam_art_options(cfg: dict, game: dict, query: str = "",
-                      limit: int = 40) -> dict:
+                      limit: int = 40, page: int = 0) -> dict:
     """Wszystkie warianty grafik Steam naraz: grid (okładka), hero (tło), logo.
 
     Zwraca {"ok", "sgdb_id", "grid":[...], "hero":[...], "logo":[...]}.
@@ -693,13 +1023,13 @@ def steam_art_options(cfg: dict, game: dict, query: str = "",
                 "grid": [], "hero": [], "logo": []}
     kind_id, val = ref
     if kind_id == "appid":
-        grids = client.grids_for_appid(val, per_page=limit, dims=_STEAM_DIMS)
-        heroes = client.heroes_for_appid(val, per_page=limit)
-        logos = client.logos_for_appid(val, per_page=limit)
+        grids = client.grids_for_appid(val, per_page=limit, dims=_STEAM_DIMS, page=page)
+        heroes = client.heroes_for_appid(val, per_page=limit, page=page)
+        logos = client.logos_for_appid(val, per_page=limit, page=page)
     else:
-        grids = client.grids_for_id(val, per_page=limit, dims=_STEAM_DIMS)
-        heroes = client.heroes_for_id(val, per_page=limit)
-        logos = client.logos_for_id(val, per_page=limit)
+        grids = client.grids_for_id(val, per_page=limit, dims=_STEAM_DIMS, page=page)
+        heroes = client.heroes_for_id(val, per_page=limit, page=page)
+        logos = client.logos_for_id(val, per_page=limit, page=page)
     return {
         "ok": True,
         "sgdb_id": val if kind_id == "game" else None,

@@ -36,7 +36,10 @@ def enumerate_link_games(links_dir: Path, collections_name: str = "Kolekcje") ->
             continue
         for f in pd.iterdir():
             if f.suffix.lower() in (".lnk", ".url"):
-                out.append({"name": f.stem, "platform": pd.name, "ext": f.suffix.lower()})
+                # stem bywa z doklejoną spacją (sortowanie serii w Explorerze) —
+                # w kolekcjach trzymamy i pokazujemy nazwę bez niej
+                out.append({"name": f.stem.rstrip(), "platform": pd.name,
+                            "ext": f.suffix.lower()})
     out.sort(key=lambda m: (m["name"].lower(), m["platform"].lower()))
     return out
 
@@ -58,10 +61,14 @@ def generate_collection(links_dir: Path, cname: str, members: list) -> dict:
         group = sorted(group, key=lambda m: m["platform"].lower())
         for i, m in enumerate(group):
             src = None
-            for ext in (".lnk", ".url"):
-                p = Path(links_dir) / m["platform"] / f"{m['name']}{ext}"
-                if p.exists():
-                    src = p; break
+            # plik może mieć doklejoną spację (sortowanie serii) — sprawdzamy obie formy
+            for stem in (m["name"], m["name"] + " "):
+                for ext in (".lnk", ".url"):
+                    p = Path(links_dir) / m["platform"] / f"{stem}{ext}"
+                    if p.exists():
+                        src = p; break
+                if src:
+                    break
             if src is None:
                 missing.append(f"{m['platform']}/{m['name']}")
                 continue

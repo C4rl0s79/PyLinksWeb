@@ -44,6 +44,16 @@ def spine_canon_key(key: str) -> str:
 
 
 @lru_cache(maxsize=256)
+def logo_key_for(system: str) -> str:
+    """Klucz pliku logo dla systemu — jego WŁASNA nazwa, nie kanoniczna.
+
+    SNESMSU1 czy SEGACD mają alias do SNES/MD (żeby był fallback, gdy nie mają
+    własnego logo), ale MOGĄ mieć własne: `platform_logo_uri` sprawdza najpierw
+    dokładny klucz. Zapis pod kluczem kanonicznym nadpisywałby logo konsoli bazowej.
+    """
+    return re.sub(r"[\s._\-]+", "", str(system or "")).upper()
+
+
 def _canon_from_presets(system: str) -> str:
     """Rozwiązuje nazwę systemu (np. „Sega - Saturn", „Dreamcast", „3DO Interactive
     Multiplayer") na krótki klucz presetu (SATURN/DC/3DO) — po dir_names/display/name.

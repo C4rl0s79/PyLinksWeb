@@ -159,12 +159,3 @@ def all_overrides(cache_dir, kind: str) -> dict:
     return out
 
 
-def stats(cache_dir) -> dict:
-    try:
-        with _db(cache_dir) as con:
-            q = lambda s: con.execute(s).fetchone()[0]
-            return {"choices": q("SELECT COUNT(*) FROM choices"),
-                    "crops": q("SELECT COUNT(*) FROM crops"),
-                    "overrides": q("SELECT COUNT(*) FROM overrides")}
-    except Exception:
-        return {"choices": 0, "crops": 0, "overrides": 0}

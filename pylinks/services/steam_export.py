@@ -19,9 +19,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from pylinks.services import art as _art
 from pylinks.services import export as _exp
-from pylinks.core.naming import safe_name
 
 # typ_key → (szablon nazwy pliku po appid, źródłowy aset steam-cache, is_icon)
 STEAM_ART_MAP = [
@@ -200,6 +198,188 @@ def _build_entry(game: dict, launch: dict, icon_path: str = ""):
 def _new_collection_id(name: str) -> str:
     h = hashlib.md5(("pylinks::" + name).encode("utf-8")).digest()
     return "uc-" + base64.urlsafe_b64encode(h).decode("ascii").rstrip("=")[:12]
+
+
+def _load_ns1(config_dir: Path):
+    """(ścieżka, tablica) magazynu kolekcji Steam albo (None, None)."""
+    ns1 = Path(config_dir) / "cloudstorage" / "cloud-storage-namespace-1.json"
+    if not ns1.exists():
+        return (None, None)
+    try:
+        arr = json.loads(ns1.read_text(encoding="utf-8"))
+        return (ns1, arr) if isinstance(arr, list) else (None, None)
+    except Exception:
+        return (None, None)
+
+
+def read_collections(config_dir: Path) -> dict:
+    """{nazwa: {"id":…, "added":[appid], "removed":[…]}} — kolekcje użytkownika.
+
+    Pomija oznaczone jako skasowane; Steam nie usuwa wpisu, tylko stawia
+    `is_deleted` i podbija wersję, żeby chmura wiedziała, co zsynchronizować.
+    """
+    _, arr = _load_ns1(config_dir)
+    out = {}
+    for item in arr or ():
+        if not (isinstance(item, list) and len(item) == 2):
+            continue
+        key, wrap = item
+        if not (isinstance(key, str) and key.startswith("user-collections.")
+                and isinstance(wrap, dict)):
+            continue
+        if wrap.get("is_deleted") or "value" not in wrap:
+            continue
+        try:
+            v = json.loads(wrap["value"])
+        except Exception:
+            continue
+        if v.get("name"):
+            out[v["name"]] = {"id": v.get("id", ""),
+                              "added": list(v.get("added") or []),
+                              "removed": list(v.get("removed") or [])}
+    return out
+
+
+def delete_collections(config_dir: Path, names) -> dict:
+    """Kasuje kolekcje po NAZWIE (oznacza `is_deleted` + podbija wersję).
+
+    Nie wycinamy wpisu z tablicy: Steam synchronizuje magazyn z chmurą po numerze
+    wersji, więc zniknięcie klucza bywa cofane przy następnym zalogowaniu.
+    Skasowanie „po steamowemu" jest trwałe.
+    """
+    res = {"ok": False, "deleted": [], "error": None}
+    want = {str(x) for x in (names or []) if x}
+    if not want:
+        res["ok"] = True
+        return res
+    ns1, arr = _load_ns1(config_dir)
+    if ns1 is None:
+        res["error"] = "brak magazynu kolekcji (otwórz raz bibliotekę Steam)"
+        return res
+    cs = ns1.parent
+    try:
+        shutil.copytree(cs, cs.with_name(f"cloudstorage.bak-{datetime.now():%Y%m%d-%H%M%S}"))
+    except Exception as ex:
+        res["error"] = f"backup nieudany: {ex}"
+        return res
+    ver = 0
+    for item in arr:
+        if isinstance(item, list) and len(item) == 2 and isinstance(item[1], dict):
+            try:
+                ver = max(ver, int(item[1].get("version", 0)))
+            except Exception:
+                pass
+    now = int(time.time())
+    for item in arr:
+        if not (isinstance(item, list) and len(item) == 2):
+            continue
+        key, wrap = item
+        if not (isinstance(key, str) and key.startswith("user-collections.")
+                and isinstance(wrap, dict) and "value" in wrap):
+            continue
+        try:
+            v = json.loads(wrap["value"])
+        except Exception:
+            continue
+        if v.get("name") in want and not wrap.get("is_deleted"):
+            ver += 1
+            wrap["is_deleted"] = True
+            wrap["timestamp"] = now
+            wrap["version"] = str(ver)
+            wrap.pop("value", None)
+            res["deleted"].append(v["name"])
+    try:
+        _atomic_json(ns1, arr)
+    except Exception as ex:
+        res["error"] = f"błąd zapisu: {ex}"
+        return res
+    res["ok"] = True
+    return res
+
+
+def rewrite_collection_members(config_dir: Path, name_ids: dict) -> dict:
+    """Nadpisuje LISTĘ członków wskazanych kolekcji (bez ruszania reszty).
+
+    Używane do sprzątania: zostawiamy tylko identyfikatory, które nadal mają
+    odpowiednik w bibliotece. Numer wersji podbijamy, bo po nim Steam decyduje,
+    czy przyjąć lokalny stan, czy nadpisać go z chmury.
+    """
+    res = {"ok": False, "changed": [], "error": None}
+    ns1, arr = _load_ns1(config_dir)
+    if ns1 is None:
+        res["error"] = "brak magazynu kolekcji"
+        return res
+    cs = ns1.parent
+    try:
+        shutil.copytree(cs, cs.with_name(f"cloudstorage.bak-{datetime.now():%Y%m%d-%H%M%S}"))
+    except Exception as ex:
+        res["error"] = f"backup nieudany: {ex}"
+        return res
+    ver = 0
+    for item in arr:
+        if isinstance(item, list) and len(item) == 2 and isinstance(item[1], dict):
+            try:
+                ver = max(ver, int(item[1].get("version", 0)))
+            except Exception:
+                pass
+    now = int(time.time())
+    for item in arr:
+        if not (isinstance(item, list) and len(item) == 2):
+            continue
+        key, wrap = item
+        if not (isinstance(key, str) and key.startswith("user-collections.")
+                and isinstance(wrap, dict) and "value" in wrap
+                and not wrap.get("is_deleted")):
+            continue
+        try:
+            v = json.loads(wrap["value"])
+        except Exception:
+            continue
+        nm = v.get("name")
+        if nm not in name_ids:
+            continue
+        nowe = sorted({int(a) for a in name_ids[nm]})
+        if nowe == sorted({int(a) for a in (v.get("added") or [])}):
+            continue
+        v["added"] = nowe
+        ver += 1
+        wrap["value"] = json.dumps(v, separators=(",", ":"), ensure_ascii=False)
+        wrap["timestamp"] = now
+        wrap["version"] = str(ver)
+        res["changed"].append(nm)
+    try:
+        _atomic_json(ns1, arr)
+    except Exception as ex:
+        res["error"] = f"błąd zapisu: {ex}"
+        return res
+    res["ok"] = True
+    return res
+
+
+def _atomic_json(path: Path, data) -> None:
+    tmp = path.with_name(path.name + f".tmp-{uuid.uuid4().hex}")
+    tmp.write_text(json.dumps(data, separators=(",", ":"), ensure_ascii=False),
+                   encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def remove_shortcuts(vdf_path: Path, appids) -> int:
+    """Wyrzuca ze `shortcuts.vdf` wpisy o podanych appid. Zwraca liczbę usuniętych."""
+    want = {int(a) for a in (appids or [])}
+    if not want:
+        return 0
+    entries = read_shortcuts_vdf(vdf_path)
+    keep = [e for e in entries if int(e.get("appid", 0)) & 0xFFFFFFFF not in want
+            and int(e.get("appid", 0)) not in want]
+    n = len(entries) - len(keep)
+    if not n:
+        return 0
+    shutil.copy2(vdf_path, vdf_path.with_name(
+        f"shortcuts.vdf.bak-{datetime.now():%Y%m%d-%H%M%S}"))
+    tmp = vdf_path.with_name(f"shortcuts.tmp-{uuid.uuid4().hex}.vdf")
+    tmp.write_bytes(write_shortcuts_vdf(keep))
+    os.replace(tmp, vdf_path)
+    return n
 
 
 def write_collections(config_dir: Path, tag_appids: dict) -> dict:

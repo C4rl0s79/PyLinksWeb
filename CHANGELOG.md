@@ -3,6 +3,91 @@
 Wszystkie istotne zmiany w PyLinksWeb. Format oparty na
 [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/).
 
+## [9.17.0] — 2026-08-31
+
+### Dodane
+- **Okno „🎮 Grupy Steam"** — zarządzanie kolekcjami w bibliotece Steam.
+  Pokazuje każdą grupę z liczbą pozycji i rozróżnia trzy stany: ile pozycji
+  faktycznie jest w bibliotece, ile numerów jest MARTWYCH (skrót „Non-Steam",
+  którego już nie ma) i ile to ZWYKŁE GRY ZE STEAMA. To rozróżnienie jest
+  kluczowe: własne kolekcje typu „Yakuza" składają się z gier Steam i nie wolno
+  ich liczyć jako zepsute.
+
+  Usuwanie całych grup — z pozycjami z biblioteki albo bez nich. Gra należąca
+  RÓWNIEŻ do innej kolekcji nigdy nie znika razem z usuwaną grupą.
+
+- **„🧹 Wyczyść martwe"** — usuwa z kolekcji numery skrótów, których już nie ma.
+  U użytkownika: **254 martwe pozycje** w 5 kolekcjach (PS2 — 152, Steam — 63,
+  PSP — 22, PS3 — 14, PS1 — 3), zbierane latami, bo usunięcie gry z dysku nie
+  ruszało ani wpisu Steam, ani jego przynależności do kolekcji.
+
+- **„🎮 Wyślij do Steam" w oknie Kolekcje** — kolekcje z `LINKS\Kolekcje`
+  trafiają do biblioteki Steam jako kolekcje o tych samych nazwach. Gry, których
+  nie ma w bibliotece Steam, są pomijane i wyliczane w podsumowaniu.
+
+### Zmienione
+- **Wykrywanie osieroconych skrótów obejmuje teraz bibliotekę Steam.** Skan
+  dopasowuje do martwych skrótów odpowiadające im wpisy „Non-Steam" i usuwa je
+  w tym samym kroku — razem z przynależnością do kolekcji. Wcześniej znikał sam
+  skrót, a w Steamie zostawała pozycja prowadząca donikąd.
+
+  Wszystkie trzy operacje wymagają ZAMKNIĘTEGO Steama (inaczej nadpisze pliki
+  przy wyjściu), robią kopię zapasową `shortcuts.vdf` i `cloudstorage`,
+  i zaczynają od podglądu.
+
+## [9.16.4] — 2026-08-31
+
+### Naprawione
+- **Gotowe skróty całych serii wiecznie wychodziły jako „brakujące".** Eksport
+  dokleja spację na końcu nazwy, gdy istnieje dłuższe rodzeństwo — „Dungeon Siege"
+  obok „Dungeon Siege 2" zapisuje się jako „Dungeon Siege .lnk" (żeby Explorer
+  sortował serię po ludzku). `missing_keys` szukał samego „Dungeon Siege.lnk"
+  i nigdy go nie znajdował. Liczy teraz nazwę tą samą funkcją co eksport.
+  Dotyczyło m.in. Trails of Cold Steel i Dungeon Siege; po poprawce **0 fałszywych
+  braków na 90 grach PC** (wcześniej kilka).
+
+- **Ta sama gra w dwóch katalogach dawała pusty kafelek.** Klucz jest z założenia
+  stabilny (liczony z nazwy, nie ze ścieżki), więc Wiedźmin 3 obecny i w Games,
+  i w GOG_Games tworzył DWA kafelki o identycznym identyfikatorze — okładka
+  trafiała tylko w pierwszy. Skan usuwa teraz powtórzenia (zostawia pierwszy)
+  i zapisuje pominięcie w dzienniku, bo to zwykle ślad po nieusuniętej kopii gry.
+
+- Zabezpieczenie w interfejsie: `setCover` maluje WSZYSTKIE kafelki o danym
+  kluczu, nie pierwszy z brzegu — gdyby duplikat kiedyś przeszedł, żaden
+  kafelek nie zostanie pusty.
+
+## [9.16.3] — 2026-08-30
+
+### Naprawione
+- **„Napraw ikony" ignorowało zaznaczenie** — brało wszystkie skróty platformy
+  niezależnie od tego, co wybrałeś. Teraz decyduje zaznaczenie, a całą platformę
+  proponuje dopiero wtedy, gdy nic nie jest zaznaczone (i mówi to wprost w pytaniu).
+
+- **Widok LINKS dziedziczył zaznaczenie z poprzedniej platformy.** Operacje w tym
+  widoku ruszają PLIKI skrótów, więc wejście zaczyna teraz z pustym wyborem.
+
+### Zmienione
+- Przycisk pokazuje zakres przed kliknięciem: „🖼 Napraw ikony (2)" albo
+  „🖼 Napraw ikony (wszystkie)".
+
+## [9.16.2] — 2026-08-30
+
+### Naprawione
+- **Binarka nie startowała: `cannot import name thumbserver`.** PyInstaller nie
+  spakował nowego modułu — jego analiza importów potrafi przeoczyć formę
+  `from pakiet import moduł as alias`, a w tym projekcie doszło do tego sporo
+  importów leniwych (w ciele funkcji), które są narażone tak samo.
+  Efekt: błąd pojawiał się dopiero przy uruchomieniu u użytkownika.
+
+  Spec zbiera teraz WSZYSTKIE własne moduły jawnie (`collect_submodules("pylinks")`
+  — 33 moduły), zamiast polegać na analizie; import w `api.py` ma jednoznaczną
+  formę `import pylinks.services.thumbserver`. Nowy plik w pakiecie nie wymaga
+  już pamiętania o niczym.
+
+  Weryfikacja też się zmienia: budowa jest teraz sprawdzana URUCHOMIENIEM
+  w czystym katalogu, a nie samą obecnością procesu — poprzednia binarka
+  przechodziła ten słabszy test mimo że była zepsuta.
+
 ## [9.16.1] — 2026-08-24
 
 ### Naprawione

@@ -7,8 +7,9 @@ Windows-only dla .lnk (pywin32); .url działa wszędzie.
 
 from __future__ import annotations
 
+import re
+
 import json
-import os
 from pathlib import Path
 
 from pylinks.core.naming import safe_name
@@ -26,14 +27,33 @@ except Exception:
 
 # ── pieczenie .ico ─────────────────────────────────────────────────────────
 def _raw_bytes(cache_dir: Path, key: str, mode: str = "icon") -> bytes | None:
-    d = Path(cache_dir) / "covers" / ("steam" if mode == "steam" else "icon")
-    from pylinks.services.art import _safe_key
-    for f in d.glob(_safe_key(key) + ".*"):
-        try:
-            return f.read_bytes()
-        except Exception:
-            return None
-    return None
+    """Pełny obraz okładki do upieczenia .ico — NIE miniatura."""
+    from pylinks.services.art import _raw_path
+    f = _raw_path(cache_dir, key, mode)
+    if not f:
+        return None
+    try:
+        return f.read_bytes()
+    except OSError:
+        return None
+
+
+def bake_args(cfg: dict, game: dict) -> dict:
+    """Parametry grzbietu dla `bake_ico()` — JEDNO miejsce, w którym się o tym decyduje.
+
+    Grzbiet dostają wyłącznie ROM-y i tylko przy włączonej opcji. Wcześniej regułę
+    tę znał wyłącznie `export_games()`, więc przepieczenie ikony gdzie indziej
+    (naprawa skrótu, eksport arcade) po cichu ZDEJMOWAŁO grzbiet z gotowego pliku.
+    """
+    on = bool(cfg.get("icon_platform_spine", False))
+    return {
+        "spine_system": (game or {}).get("system", "")
+                        if (on and (game or {}).get("source") == "rom") else "",
+        "spine_side": cfg.get("icon_spine_side", "left"),
+        "logo_dir": cfg.get("platform_logo_dir", ""),
+        "logo_scale": float(cfg.get("spine_logo_scale", 0.85) or 0.85),
+        "spine_frac": float(cfg.get("icon_spine_frac", 0.22) or 0.22),
+    }
 
 
 def bake_ico(cache_dir: Path, key: str, fit: str, offset: float,
@@ -257,11 +277,6 @@ def export_games(cfg: dict, games: list[dict], cache_dir: Path,
     """
     steam_exe = (cfg.get("steam_exe") or "").strip()
     creator = ShortcutCreator(steam_exe)
-    spine_on = bool(cfg.get("icon_platform_spine", False))
-    spine_side = cfg.get("icon_spine_side", "left")
-    logo_dir = cfg.get("platform_logo_dir", "")
-    logo_scale = float(cfg.get("spine_logo_scale", 0.85) or 0.85)
-    spine_frac = float(cfg.get("icon_spine_frac", 0.22) or 0.22)
     icons_dir = Path(cache_dir) / "icons"
     icons_dir.mkdir(parents=True, exist_ok=True)
 
@@ -277,6 +292,7 @@ def export_games(cfg: dict, games: list[dict], cache_dir: Path,
     from pylinks.api import _game_key       # klucz spójny z resztą (lazy, bez cyklu)
     exe_over = cfg.get("exe_override", {}) or {}
     done, failed, no_icon = 0, [], 0
+    _sibs: dict = {}          # platforma → nazwy rodzeństwa (do sortowania serii)
     total = len(games)
     for i, g in enumerate(games):
         key = _game_key(g)
@@ -286,6 +302,16 @@ def export_games(cfg: dict, games: list[dict], cache_dir: Path,
         plat = _platform_dir(g)
         out_dir = Path(links_dir) / plat
         out_dir.mkdir(parents=True, exist_ok=True)
+        if plat not in _sibs:
+            existing = set()
+            try:
+                existing = {f.stem.rstrip() for f in out_dir.iterdir()
+                            if f.suffix.lower() in (".lnk", ".url")}
+            except Exception:
+                pass
+            _sibs[plat] = existing | {safe_name(x.get("name", "") or "gra")
+                                      for x in games if _platform_dir(x) == plat}
+        name = sortable_stem(name, _sibs[plat])
 
         launch = _launch_for(g, creator)
         if not launch:
@@ -293,10 +319,8 @@ def export_games(cfg: dict, games: list[dict], cache_dir: Path,
 
         # ikona .ico (grzbiet tylko dla ROM-a)
         fit, off = _crop(key)
-        spine_sys = g.get("system", "") if (spine_on and g.get("source") == "rom") else ""
         ico_path = ""
-        ico = bake_ico(cache_dir, key, fit, off, spine_sys, spine_side, logo_dir,
-                       logo_scale, spine_frac)
+        ico = bake_ico(cache_dir, key, fit, off, **bake_args(cfg, g))
         if ico:
             try:
                 ico_path = write_cache_ico(icons_dir, key, ico)
@@ -328,6 +352,29 @@ def export_games(cfg: dict, games: list[dict], cache_dir: Path,
     return {"ok": True, "created": done, "no_icon": no_icon,
             "failed": failed, "total": total,
             "win32com": WIN32COM}
+
+
+def sortable_stem(name: str, siblings) -> str:
+    """Nazwa pliku skrótu tak, żeby Explorer sortował serię po ludzku.
+
+    Problem: „Tekken.lnk" ląduje ZA „Tekken 2.lnk", bo porównanie rozjeżdża się
+    na 7. znaku — tam jedna nazwa ma KROPKĘ rozszerzenia, a druga jeszcze spację
+    (spacja 0x20 < kropka 0x2E). Wspólne `.lnk` nie pomaga, bo kropka zaczyna się
+    w innym miejscu. Znaki zero-width też nie — mają zerową wagę w porównaniu.
+
+    Rozwiązanie: gdy istnieje DŁUŻSZE rodzeństwo („Tekken 2", ale też
+    „Final Fantasy VII" obok „Final Fantasy"), doklejamy do krótszego SPACJĘ. Spacja ma wagę, więc `Tekken .lnk` sortuje się pierwszy,
+    a że Explorer nigdy nie pokazuje rozszerzenia `.lnk` (NeverShowExt), podpis
+    wygląda identycznie jak dotąd.
+    """
+    base = str(name or "")
+    if not base or base.endswith(" "):
+        return base
+    pref = base + " "
+    for sib in siblings:
+        if sib != base and sib.startswith(pref):
+            return pref
+    return base
 
 
 def _safe_ico(key: str) -> str:

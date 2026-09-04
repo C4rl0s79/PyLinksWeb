@@ -25,10 +25,73 @@
       <button class="btn ghost" id="btnFit" title="Dopasowanie ikony (kwadrat): całość vs wypełnij">⬚ Dopasowanie</button>
       <button class="btn ghost" id="btnPing" title="Test mostu Python↔JS">⚡ Test mostu</button>
       <button class="btn ghost" id="btnColl">📁 Kolekcje</button>
+      <button class="btn ghost" id="btnSteamGroups" title="Zarządzaj grupami (kolekcjami) w bibliotece Steam">🎮 Grupy Steam</button>
+      <button class="btn ghost" id="btnConsole" title="Konsola / dziennik zdarzeń (F12)">≡ Konsola</button>
       <button class="btn ghost" id="btnSettings">⚙ Ustawienia</button>
     </div>
   </header>
 
+  <!-- Pasek stanu + konsola: WebView2 nie pokazuje konsoli przeglądarki, więc bez
+       tego użytkownik nie ma jak zobaczyć, co program robi w tle. -->
+  <div id="busyBar" class="busy-bar" hidden>
+    <span class="busy-dot"></span><span id="busyTxt"></span>
+    <button class="btn ghost mini" id="busyLog" title="Pokaż konsolę">≡</button>
+  </div>
+  <div id="conPanel" class="con-panel" hidden>
+    <div class="con-head">
+      <b>Konsola</b>
+      <span id="conPath" class="muted"></span>
+      <span style="flex:1"></span>
+      <label class="chk mini"><input id="conAuto" type="checkbox" checked> odświeżaj</label>
+      <button class="btn ghost mini" id="conClear">Wyczyść</button>
+      <button class="btn ghost mini" id="conOpen">📂</button>
+      <button class="btn ghost mini" id="conClose">✕</button>
+    </div>
+    <pre id="conBox" class="con-box"></pre>
+  </div>
+  <!-- Zarządzanie kategoriami arcade (catver.ini: Kategoria / Podkategoria) -->
+  <!-- Grupy (kolekcje) w bibliotece Steam -->
+  <div id="sgModal" class="modal" hidden>
+    <div class="modal-box cat-box">
+      <div class="modal-head">
+        <b>Grupy w bibliotece Steam</b>
+        <span id="sgInfo" class="muted"></span>
+        <span style="flex:1"></span>
+        <button class="btn ghost mini" id="sgClean" title="Usuwa z kolekcji numery skrótów, których już nie ma">🧹 Wyczyść martwe</button>
+        <button class="btn ghost mini" id="sgClose">✕</button>
+      </div>
+      <div class="cat-hint muted">Zaznacz grupy do usunięcia. „Nasze" tworzy program
+        z platform; pozostałe to Twoje własne kolekcje ze Steama.</div>
+      <div id="sgList" class="cat-tree"></div>
+      <div class="modal-foot">
+        <span id="sgMsg" class="muted"></span>
+        <span style="flex:1"></span>
+        <label class="chk mini"><input id="sgDrop" type="checkbox" checked> usuń też pozycje z biblioteki</label>
+        <button class="btn" id="sgDel">Usuń zaznaczone</button>
+      </div>
+    </div>
+  </div>
+  <div id="catModal" class="modal" hidden>
+    <div class="modal-box cat-box">
+      <div class="modal-head">
+        <b id="catTitle">Kategorie arcade</b>
+        <span id="catCount" class="muted"></span>
+        <span style="flex:1"></span>
+        <input id="catFilter" type="text" placeholder="szukaj kategorii…" spellcheck="false">
+        <button class="btn ghost mini" id="catAll">Wszystkie</button>
+        <button class="btn ghost mini" id="catNone">Żadne</button>
+        <button class="btn ghost mini" id="catClose">✕</button>
+      </div>
+      <div class="cat-hint muted">Odznacz gałąź, żeby ukryć ją w bibliotece.
+        Odznaczenie kategorii ukrywa wszystkie jej podkategorie.</div>
+      <div id="catTree" class="cat-tree"></div>
+      <div class="modal-foot">
+        <span id="catMsg" class="muted"></span>
+        <span style="flex:1"></span>
+        <button class="btn" id="catSave">Zapisz</button>
+      </div>
+    </div>
+  </div>
   <div id="pfBar" class="pf-bar" hidden>
     <div class="pf-track"><div class="pf-fill" id="pfFill"></div></div>
     <span class="pf-txt" id="pfTxt"></span>
@@ -49,6 +112,11 @@
         <div class="side-title">Systemy ROM <span id="romTotal" class="muted"></span></div>
         <div id="romSystems" class="platforms"><div class="muted pad">— skanuj —</div></div>
       </div>
+      <div class="side-group" id="mameGroup" hidden>
+        <div class="side-title">Arcade (MAME) <span id="mameTotal" class="muted"></span>
+          <button class="btn ghost mini" id="btnCats" title="Wybierz kategorie i podkategorie (catver.ini)">⚙</button></div>
+        <div id="mameGenres" class="platforms"></div>
+      </div>
       <div class="side-group">
         <div class="side-title">Skróty LINKS <span id="platCount" class="muted"></span></div>
         <div id="platforms" class="platforms"><div class="muted pad">—</div></div>
@@ -66,6 +134,8 @@
           <span id="selCount" class="muted"></span>
         </div>
         <button id="btnExport" class="btn" hidden>📦 Utwórz skróty</button>
+        <button id="btnFixIcons" class="btn ghost" hidden
+                title="Przepiecze ikony istniejących skrótów — naprawia te bez ikony i te zrobione przed pobraniem okładki">🖼 Napraw ikony</button>
         <input id="filter" class="filter" type="search" placeholder="Filtruj po nazwie…" hidden>
       </div>
       <div id="grid" class="grid">
@@ -92,6 +162,7 @@
     <button class="ctx-item" data-act="frame">▦ Ramki</button>
     <button class="ctx-item" data-act="default">↺ Domyślne</button>
     <button class="ctx-item" data-act="exe" hidden>📄 Wskaż plik .exe…</button>
+    <button class="ctx-item" data-act="ver" hidden>🎛 Wybierz wersję…</button>
   </div>
 
   <div id="grpMenu" class="ctx" hidden>
@@ -126,6 +197,7 @@
       </div>
       <div class="set-foot">
         <button class="btn" id="collGenAll">Utwórz foldery (wszystkie)</button>
+        <button class="btn ghost" id="collSteam" title="Wyślij kolekcje do biblioteki Steam jako kolekcje o tych samych nazwach">🎮 Wyślij do Steam</button>
         <button class="btn ghost" id="collDel">Usuń kolekcję</button>
         <span id="collMsg" class="muted"></span>
       </div>
@@ -148,6 +220,11 @@
           <label class="chk"><input id="s_usewebapi" type="checkbox"> Używaj Steam Web API</label>
           <div class="inln"><button class="btn ghost" id="s_testsgdb">Testuj SGDB</button>
             <span id="s_sgdbres" class="muted"></span></div>
+          <div class="inln"><button class="btn ghost" id="s_teststeam">Testuj Steam Web API</button>
+            <span id="s_steamres" class="muted"></span></div>
+          <div class="inln"><button class="btn" id="s_testall">🧪 Testuj wszystkie API</button>
+            <span id="s_allres" class="muted"></span></div>
+          <div id="s_testTable" class="test-tbl" hidden></div>
         </section>
 
         <section class="set-sec">
@@ -161,6 +238,10 @@
           <label class="chk"><input id="s_epic" type="checkbox"> Skanuj Epic</label>
           <label class="chk"><input id="s_gog" type="checkbox"> Skanuj GOG</label>
           <label class="chk"><input id="s_owned" type="checkbox"> Steam: dołącz posiadane (nie tylko zainstalowane)</label>
+          <div class="inln"><button class="btn ghost" id="s_steamclean"
+              title="Znajduje w bibliotece Steam wpisy „Non-Steam”, które tak naprawdę uruchamiają grę ze Steama — przez nie każda taka gra widnieje dwa razy">🧹 Posprzątaj duplikaty w Steam</button>
+            <span id="s_cleanres" class="muted"></span></div>
+          <pre id="s_cleanbox" class="logbox" hidden></pre>
         </section>
 
         <section class="set-sec">
@@ -180,8 +261,48 @@
           <label class="chk"><input id="s_igdb" type="checkbox"> IGDB</label>
           <label>IGDB Client ID <input id="s_igdbid" type="password" autocomplete="off" spellcheck="false"></label>
           <label>IGDB Client Secret <input id="s_igdbsec" type="password" autocomplete="off" spellcheck="false"></label>
+          <label>Maks. grafik z IGDB / TheGamesDB na grę
+            <input id="s_maxsrc" type="number" min="4" max="80" step="4">
+            <span class="muted" style="font-size:11px">te źródła nie mają stronicowania —
+              „Pokaż więcej" ich nie dociągnie, więc pulę bierzemy od razu</span>
+          </label>
           <label class="chk"><input id="s_tgdb" type="checkbox"> TheGamesDB</label>
           <label>TGDB API Key <input id="s_tgdbkey" type="password" autocomplete="off" spellcheck="false"></label>
+          <div class="inln"><button class="btn ghost" id="s_testigdb">Testuj IGDB</button>
+            <span id="s_igdbres" class="muted"></span></div>
+          <div class="inln"><button class="btn ghost" id="s_testtgdb">Testuj TheGamesDB</button>
+            <span id="s_tgdbres" class="muted"></span></div>
+          <label class="chk"><input id="s_ss" type="checkbox"> ScreenScraper.fr (okładki arcade po nazwie setu MAME)</label>
+          <div class="muted small">API wymaga danych <b>dewelopera</b> (devid/devpassword)
+            przyznawanych autorowi programu na wniosek — samo konto użytkownika nie wystarcza.
+            Konto usera jest opcjonalne i tylko podnosi dobowy limit zapytań.</div>
+          <label>ScreenScraper devid <input id="s_ssdevid" type="text" autocomplete="off" spellcheck="false"></label>
+          <label>ScreenScraper devpassword <input id="s_ssdevpass" type="password" autocomplete="off" spellcheck="false"></label>
+          <label>Konto ScreenScraper (login) <input id="s_ssuser" type="text" autocomplete="off" spellcheck="false"></label>
+          <label>Hasło konta <input id="s_sspass" type="password" autocomplete="off" spellcheck="false"></label>
+          <div class="inln"><button class="btn ghost" id="s_testscreenscraper">Testuj ScreenScraper</button>
+            <span id="s_ssres" class="muted"></span></div>
+          <div class="inln"><button class="btn ghost" id="s_testlibretro">Testuj Libretro</button>
+            <span id="s_libretrores" class="muted"></span></div>
+          <div class="inln"><button class="btn ghost" id="s_testlogos">Testuj repozytorium logotypów</button>
+            <span id="s_logosres" class="muted"></span></div>
+        </section>
+
+        <section class="set-sec">
+          <h3>Biblioteka arcade (MAME)</h3>
+          <label class="chk"><input id="s_mameon" type="checkbox"> Włącz bibliotekę arcade</label>
+          <label>mame.exe <span class="inln"><input id="s_mameexe" type="text" spellcheck="false"><button class="btn ghost mini" data-file="s_mameexe">📁</button></span></label>
+          <label>Biblioteka (duża kolekcja, może być odpięta) <span class="inln"><input id="s_mamelib" type="text" spellcheck="false"><button class="btn ghost mini" data-folder="s_mamelib">📁</button></span></label>
+          <label>Katalog do grania (roms) <span class="inln"><input id="s_mameroms" type="text" spellcheck="false"><button class="btn ghost mini" data-folder="s_mameroms">📁</button></span></label>
+          <label>Pliki wsparcia (catver.ini, genre.ini, mature.ini) <span class="inln"><input id="s_mamesup" type="text" spellcheck="false"><button class="btn ghost mini" data-folder="s_mamesup">📁</button></span></label>
+          <div class="inln"><button class="btn ghost" id="s_showlog">📄 Dziennik zdarzeń</button>
+            <button class="btn ghost" id="s_openlog">📂 Pokaż plik</button>
+            <span id="s_logres" class="muted"></span></div>
+          <pre id="s_logbox" class="logbox" hidden></pre>
+          <div class="inln"><button class="btn ghost" id="s_mamerefresh">↻ Odśwież metadane z MAME</button>
+            <button class="btn ghost" id="s_mamecovers" title="Kasuje automatycznie dobrane okładki arcade, żeby pobrały się ponownie. Ręcznie wybrane grafiki zostają.">🖼 Odśwież okładki arcade</button>
+            <span id="s_mamestat" class="muted"></span></div>
+          <div id="s_mameGenres" class="genre-box" hidden></div>
         </section>
 
         <section class="set-sec">
@@ -245,12 +366,19 @@
           <div id="pkSuggest" class="pk-suggest" hidden></div>
         </div>
         <button class="btn" id="pkSearch">Szukaj</button>
+        <label class="sizer" title="Wielkość miniatur">▦
+          <input type="range" id="pkSize" min="90" max="320" step="10" value="150">
+        </label>
       </div>
       <div id="pkProgress" class="pk-progress" hidden>
         <div class="pk-bar"><div class="pk-bar-fill" id="pkBarFill"></div></div>
         <span class="pk-bar-txt muted" id="pkBarTxt"></span>
       </div>
       <div id="pkGrid" class="pk-grid"></div>
+      <div class="pk-more">
+        <button class="btn ghost" id="pkMore">➕ Pokaż więcej</button>
+        <span id="pkMoreMsg" class="muted"></span>
+      </div>
     </div>
   </div>
 
@@ -297,6 +425,25 @@
       <div class="set-foot">
         <button class="btn" id="lgSave">Zapisz i zamknij</button>
         <span id="lgMsg" class="muted"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Wybór wersji zestawu MAME -->
+  <div id="verModal" class="modal" hidden>
+    <div class="modal-box" style="width:min(680px,96vw);height:70vh;resize:none">
+      <div class="modal-head">
+        <div>
+          <div class="modal-title" id="verTitle">Wybierz wersję</div>
+          <div class="modal-sub muted">Do katalogu do grania trafi tylko zaznaczona wersja.</div>
+        </div>
+        <button class="btn ghost" id="verClose">✕</button>
+      </div>
+      <div id="verList" class="ver-list"></div>
+      <div class="set-foot">
+        <button class="btn" id="verExport">📦 Eksportuj wybraną wersję</button>
+        <button class="btn ghost" id="verCheck">✓ Sprawdź kompletność</button>
+        <span id="verMsg" class="muted"></span>
       </div>
     </div>
   </div>

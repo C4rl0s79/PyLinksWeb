@@ -25,6 +25,12 @@ for pkg in ("webview", "clr_loader", "pythonnet"):
     except Exception:
         pass
 
+# WŁASNE moduły — zbierane JAWNIE. Analiza importów PyInstallera potrafi przeoczyć
+# `from pakiet import moduł as alias` oraz importy leniwe (w ciele funkcji), których
+# w tym projekcie jest sporo. Efekt przeoczenia to binarka, która wywala się dopiero
+# przy starcie u użytkownika — zdarzyło się z `services.thumbserver`.
+hiddenimports += collect_submodules("pylinks")
+
 # pywin32 — tworzenie skrótów .lnk (ShortcutCreator) + COM
 hiddenimports += collect_submodules("win32com")
 hiddenimports += [

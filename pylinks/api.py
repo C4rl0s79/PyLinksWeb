@@ -19,7 +19,7 @@ from pylinks.constants import C
 from pylinks.config.defaults import _default_config
 from pylinks.config.migrate import migrate_config
 from pylinks.services import scan_pc, art
-from pylinks.services import thumbserver as _thumbsrv
+import pylinks.services.thumbserver as _thumbsrv
 from pylinks.core import store as _store
 
 
@@ -507,7 +507,7 @@ class Api:
         """
         cfg = _load_config()
         res = scan_pc.scan_pc_library(cfg)
-        self._pc_games = res["games"]
+        self._pc_games = self._dedupe_by_key(res["games"])
         self._stem_index = None
         return {
             "ok": True,
@@ -782,6 +782,196 @@ class Api:
             return {"ok": False, "reason": str(ex)}
         return {"ok": True, "removed": len(bad), "left": len(keep), "names": names[:50]}
 
+    def _steam_config_dir(self, cfg: dict = None):
+        from pylinks.services import steam_export as _se
+        cfg = cfg or _load_config()
+        dirs = _se.find_userdata_configs(cfg.get("steam_exe", ""),
+                                         cfg.get("steam_userdata_dir", ""))
+        return dirs[0] if dirs else None
+
+    def steam_groups(self) -> dict:
+        """Kolekcje Steam + stan ich pozycji.
+
+        Dla każdej podajemy, ile pozycji faktycznie ma odpowiednik w `shortcuts.vdf`
+        i ile z nich wskazuje na NIEISTNIEJĄCY plik. Kolekcje rosną same: usunięcie
+        gry z dysku nie rusza ani skrótu Steam, ani przynależności do kolekcji,
+        więc po latach zostają w nich pozycje-widma.
+        """
+        from pylinks.services import steam_export as _se
+        cfg = _load_config()
+        cd = self._steam_config_dir(cfg)
+        if not cd:
+            return {"ok": False, "reason": "nie znaleziono userdata Steam"}
+        coll = _se.read_collections(cd)
+        entries = _se.read_shortcuts_vdf(cd / "shortcuts.vdf")
+        by_appid, dead = {}, set()
+        for e in entries:
+            a = int(e.get("appid", 0)) & 0xFFFFFFFF
+            by_appid[a] = e
+            exe = (e.get("Exe") or e.get("exe") or "").strip('"')
+            if exe and not Path(exe).exists():
+                dead.add(a)
+        # etykiety, które nadajemy sami — po nich poznajemy „nasze" kolekcje
+        nasze = {"Non-Steam", "Windows", "Gog", "Epic", "Steam"}
+        nasze |= {g.get("system", "") for g in self._rom_games if g.get("system")}
+        out = []
+        for name, v in coll.items():
+            ids = [int(a) & 0xFFFFFFFF for a in v.get("added") or []]
+            znane = [a for a in ids if a in by_appid]
+            # Identyfikator BEZ wpisu w shortcuts.vdf znaczy dwie ROZŁĄCZNE rzeczy:
+            # * appid ≥ 0x80000000 → skrót „Non-Steam", którego już nie ma = śmieć
+            #   po zmianie ścieżki albo po usunięciu gry;
+            # * mniejszy → zwyczajna gra ze Steama, dodana do kolekcji ręcznie.
+            #   Takich NIE WOLNO liczyć jako zepsute (kolekcje typu „Yakuza").
+            brak = [a for a in ids if a not in by_appid]
+            smieci = [a for a in brak if a >= 0x80000000]
+            gry_steam = [a for a in brak if a < 0x80000000]
+            out.append({"name": name, "total": len(ids), "known": len(znane),
+                        "dead": len([a for a in znane if a in dead]),
+                        "stale": len(smieci), "steam_games": len(gry_steam),
+                        "ours": name in nasze})
+        out.sort(key=lambda x: (-x["total"], x["name"].lower()))
+        return {"ok": True, "groups": out, "entries": len(entries),
+                "dead_entries": len(dead), "config_dir": str(cd),
+                "steam_running": _se.is_steam_running()}
+
+    def steam_remove_groups(self, names: list, drop_entries: bool = True,
+                            dry_run: bool = True) -> dict:
+        """Kasuje CAŁE kolekcje Steam, opcjonalnie z ich pozycjami „Non-Steam".
+
+        `drop_entries=False` zostawia gry w bibliotece, znika sama kolekcja.
+        Wymaga ZAMKNIĘTEGO Steama — inaczej nadpisze pliki przy wyjściu.
+        """
+        from pylinks.services import steam_export as _se
+        from pylinks.core import log as _log
+        want = [str(x) for x in (names or []) if x]
+        if not want:
+            return {"ok": False, "reason": "nie wskazano kolekcji"}
+        cd = self._steam_config_dir()
+        if not cd:
+            return {"ok": False, "reason": "nie znaleziono userdata Steam"}
+        coll = _se.read_collections(cd)
+        vdf = cd / "shortcuts.vdf"
+        entries = _se.read_shortcuts_vdf(vdf)
+        have = {int(e.get("appid", 0)) & 0xFFFFFFFF for e in entries}
+        # pozycje NALEŻĄCE WYŁĄCZNIE do kasowanych kolekcji — gra w dwóch
+        # kolekcjach nie może zniknąć razem z jedną z nich
+        inne = set()
+        for n, v in coll.items():
+            if n not in want:
+                inne |= {int(a) & 0xFFFFFFFF for a in v.get("added") or []}
+        do_usuniecia = set()
+        for n in want:
+            for a in (coll.get(n) or {}).get("added") or []:
+                a = int(a) & 0xFFFFFFFF
+                if a in have and a not in inne:
+                    do_usuniecia.add(a)
+        nazwy = [_se._entry_name(e) for e in entries
+                 if (int(e.get("appid", 0)) & 0xFFFFFFFF) in do_usuniecia]
+        if dry_run:
+            return {"ok": True, "dry_run": True, "groups": want,
+                    "entries": len(do_usuniecia) if drop_entries else 0,
+                    "names": nazwy[:50], "kept_shared": len(inne & have),
+                    "steam_running": _se.is_steam_running()}
+        if _se.is_steam_running():
+            return {"ok": False, "reason": "zamknij Steam przed sprzątaniem"}
+        usuniete = _se.remove_shortcuts(vdf, do_usuniecia) if drop_entries else 0
+        res = _se.delete_collections(cd, want)
+        if not res.get("ok"):
+            return {"ok": False, "reason": res.get("error") or "błąd kolekcji",
+                    "removed_entries": usuniete}
+        _log.write("steam", f"usunieto kolekcje {res['deleted']} "
+                            f"+ {usuniete} pozycji")
+        return {"ok": True, "deleted": res["deleted"], "removed_entries": usuniete}
+
+    def steam_clean_collections(self, dry_run: bool = True) -> dict:
+        """Usuwa z kolekcji identyfikatory skrótów, których już nie ma.
+
+        Dotyczy WYŁĄCZNIE appid ≥ 0x80000000 (skróty „Non-Steam") bez wpisu
+        w `shortcuts.vdf`. Zwykłe gry ze Steama zostają nietknięte — w kolekcjach
+        typu „Yakuza" to normalna, poprawna zawartość.
+        """
+        from pylinks.services import steam_export as _se
+        from pylinks.core import log as _log
+        cd = self._steam_config_dir()
+        if not cd:
+            return {"ok": False, "reason": "nie znaleziono userdata Steam"}
+        coll = _se.read_collections(cd)
+        have = {int(e.get("appid", 0)) & 0xFFFFFFFF
+                for e in _se.read_shortcuts_vdf(cd / "shortcuts.vdf")}
+        plan, razem = [], 0
+        for name, v in coll.items():
+            ids = [int(a) & 0xFFFFFFFF for a in v.get("added") or []]
+            smieci = [a for a in ids if a >= 0x80000000 and a not in have]
+            if smieci:
+                plan.append({"name": name, "remove": len(smieci),
+                             "left": len(ids) - len(smieci)})
+                razem += len(smieci)
+        if dry_run:
+            return {"ok": True, "dry_run": True, "total": razem, "groups": plan,
+                    "steam_running": _se.is_steam_running()}
+        if not razem:
+            return {"ok": True, "total": 0, "groups": []}
+        if _se.is_steam_running():
+            return {"ok": False, "reason": "zamknij Steam przed sprzątaniem"}
+        keep = {}
+        for name, v in coll.items():
+            ids = [int(a) & 0xFFFFFFFF for a in v.get("added") or []]
+            keep[name] = [a for a in ids if not (a >= 0x80000000 and a not in have)]
+        res = _se.rewrite_collection_members(cd, keep)
+        if not res.get("ok"):
+            return {"ok": False, "reason": res.get("error") or "błąd zapisu"}
+        _log.write("steam", f"kolekcje: usunieto {razem} martwych identyfikatorow")
+        return {"ok": True, "total": razem, "groups": plan}
+
+    def steam_push_collections(self, names: list = None) -> dict:
+        """Wysyła kolekcje z „Kolekcje" (LINKS) do Steam jako kolekcje Steam.
+
+        Członków dopasowujemy do istniejących wpisów „Non-Steam" po nazwie —
+        kolekcja w Steam ma sens tylko dla gier, które są już w bibliotece.
+        """
+        from pylinks.services import steam_export as _se
+        from pylinks.core.naming import safe_name
+        from pylinks.core import log as _log
+        cd = self._steam_config_dir()
+        if not cd:
+            return {"ok": False, "reason": "nie znaleziono userdata Steam"}
+        colls = _load_config().get("collections", {}) or {}
+        want = [n for n in (names or list(colls)) if n in colls]
+        if not want:
+            return {"ok": False, "reason": "brak kolekcji do wysłania"}
+        entries = _se.read_shortcuts_vdf(cd / "shortcuts.vdf")
+        idx = {}
+        for e in entries:
+            nm = safe_name(_se._entry_name(e) or "").rstrip()
+            if nm:
+                idx.setdefault(nm.lower(), int(e.get("appid", 0)) & 0xFFFFFFFF)
+        tag_appids, braki = {}, {}
+        for n in want:
+            ids, miss = [], []
+            for m in colls.get(n) or []:
+                nazwa = (m.get("name") if isinstance(m, dict) else str(m)) or ""
+                a = idx.get(safe_name(nazwa).rstrip().lower())
+                (ids.append(a) if a else miss.append(nazwa))
+            if ids:
+                tag_appids[n] = ids
+            if miss:
+                braki[n] = miss[:20]
+        if not tag_appids:
+            return {"ok": False, "reason": "żadnej gry z kolekcji nie ma "
+                                           "w bibliotece Steam", "missing": braki}
+        if _se.is_steam_running():
+            return {"ok": False, "reason": "zamknij Steam przed zapisem",
+                    "would_send": {k: len(v) for k, v in tag_appids.items()}}
+        res = _se.write_collections(cd, tag_appids)
+        _log.write("steam", f"kolekcje z LINKS -> Steam: "
+                            f"utworzone {res.get('created')}, "
+                            f"zaktualizowane {res.get('updated')}")
+        return {"ok": bool(res.get("ok")) or not res.get("error"),
+                "created": res.get("created", []), "updated": res.get("updated", []),
+                "error": res.get("error"), "missing": braki,
+                "sent": {k: len(v) for k, v in tag_appids.items()}}
+
     def steam_running(self) -> dict:
         from pylinks.services import steam_export as _se
         return {"running": _se.is_steam_running()}
@@ -819,7 +1009,53 @@ class Api:
                 # stem bywa z doklejoną spacją (sortowanie serii) — porównujemy bez niej
                 if f.suffix.lower() in (".lnk", ".url") and f.stem.rstrip() not in names:
                     orphans.append({"name": f.stem, "platform": d.name, "path": str(f)})
-        return {"orphans": orphans}
+        # Wpisy w bibliotece Steam nie znikają razem ze skrótem — trzeba je wskazać
+        # osobno, inaczej po usunięciu gry z dysku zostaje martwa pozycja w Steamie.
+        return {"orphans": orphans, "steam": self._steam_orphans(orphans)}
+
+    def _steam_orphans(self, orphans: list) -> list:
+        """Wpisy „Non-Steam" odpowiadające osieroconym skrótom (po nazwie)."""
+        from pylinks.services import steam_export as _se
+        from pylinks.core.naming import safe_name
+        if not orphans:
+            return []
+        try:
+            cd = self._steam_config_dir()
+            if not cd:
+                return []
+            entries = _se.read_shortcuts_vdf(cd / "shortcuts.vdf")
+        except Exception:
+            return []
+        chcemy = {safe_name(o["name"]).rstrip().lower() for o in orphans}
+        out = []
+        for e in entries:
+            nm = _se._entry_name(e) or ""
+            if safe_name(nm).rstrip().lower() in chcemy:
+                out.append({"name": nm,
+                            "appid": int(e.get("appid", 0)) & 0xFFFFFFFF})
+        return out
+
+    def delete_steam_entries(self, appids: list) -> dict:
+        """Usuwa wskazane wpisy z biblioteki Steam (i ich przynależność do kolekcji)."""
+        from pylinks.services import steam_export as _se
+        from pylinks.core import log as _log
+        ids = [int(a) for a in (appids or []) if a]
+        if not ids:
+            return {"ok": True, "removed": 0}
+        cd = self._steam_config_dir()
+        if not cd:
+            return {"ok": False, "reason": "nie znaleziono userdata Steam"}
+        if _se.is_steam_running():
+            return {"ok": False, "reason": "zamknij Steam, żeby usunąć wpisy"}
+        n = _se.remove_shortcuts(cd / "shortcuts.vdf", ids)
+        # wyczyść je też z kolekcji, żeby nie zostały tam jako martwe numery
+        coll = _se.read_collections(cd)
+        keep = {nm: [int(a) & 0xFFFFFFFF for a in (v.get("added") or [])
+                     if (int(a) & 0xFFFFFFFF) not in set(ids)]
+                for nm, v in coll.items()}
+        _se.rewrite_collection_members(cd, keep)
+        _log.write("steam", f"usunieto {n} wpisow (duchy) + wyczyszczono kolekcje")
+        return {"ok": True, "removed": n}
 
     def delete_orphans(self, paths: list) -> dict:
         """Usuwa wskazane skróty + ich ikony .ico (z IconLocation)."""
@@ -844,19 +1080,62 @@ class Api:
         _ICON_URI_CACHE.clear()
         return {"ok": True, "deleted": deleted, "icons": icons}
 
+    @staticmethod
+    def _dedupe_by_key(games: list) -> list:
+        """Usuwa powtórzone gry o tym samym kluczu (ta sama gra w dwóch katalogach).
+
+        Klucz jest z założenia STABILNY — liczony z nazwy, nie ze ścieżki — żeby
+        wybór ikony przeżył przeniesienie gry. Ceną jest to, że ta sama gra
+        w dwóch miejscach (np. w Games i w GOG_Games) daje dwa wpisy
+        o identycznym kluczu: powstawały dwa kafelki, a okładka trafiała tylko
+        w pierwszy — drugi zostawał pusty. Zostawiamy pierwszy i piszemy o tym
+        w dzienniku, bo to zwykle ślad po nieusuniętej kopii gry.
+        """
+        from pylinks.core import log as _log
+        seen, out = {}, []
+        for g in games:
+            k = _game_key(g)
+            if k in seen:
+                _log.write("skan", f"pominieto duplikat {g.get('name','')} "
+                                   f"({g.get('game_dir','')}) — juz jest "
+                                   f"z {seen[k]}")
+                continue
+            seen[k] = g.get("game_dir", "")
+            out.append(g)
+        return out
+
     def missing_keys(self, kind: str = "pc", filt: str = "") -> list:
-        """Klucze gier BEZ istniejącego skrótu w LINKS/<platforma>/."""
+        """Klucze gier BEZ istniejącego skrótu w LINKS/<platforma>/.
+
+        Nazwę pliku liczymy DOKŁADNIE tak jak eksport (`sortable_stem`), bo ten
+        dokleja spację na końcu, gdy istnieje dłuższe rodzeństwo — „Dungeon Siege"
+        obok „Dungeon Siege 2" zapisuje się jako „Dungeon Siege .lnk". Porównanie
+        po samym `safe_name` nigdy w to nie trafiało, więc gotowe skróty całych
+        serii (Trails of Cold Steel, Dungeon Siege) wiecznie wychodziły jako braki.
+        """
         from pylinks.core.naming import safe_name
+        from pylinks.services.export import sortable_stem
         if kind == "rom":
             games = [g for g in self._rom_games if not filt or g.get("system") == filt]
         else:
             games = [g for g in self._pc_games if not filt or g.get("source") == filt]
+        # rodzeństwo per platforma — te same zbiory, na których pracuje eksport
+        sibs: dict = {}
+        for g in games:
+            plat = g.get("system", "") if g.get("source") == "rom" else "PC"
+            sibs.setdefault(plat, set()).add(safe_name(g.get("name", "") or "gra"))
+        for plat, names in sibs.items():          # dołóż to, co JUŻ leży na dysku
+            try:
+                names |= {f.stem.rstrip() for f in (LINKS_DIR / plat).iterdir()
+                          if f.suffix.lower() in (".lnk", ".url")}
+            except OSError:
+                pass
         out = []
         for g in games:
             plat = g.get("system", "") if g.get("source") == "rom" else "PC"
             d = LINKS_DIR / plat
-            safe = safe_name(g.get("name", ""))
-            if not ((d / (safe + ".lnk")).exists() or (d / (safe + ".url")).exists()):
+            stem = sortable_stem(safe_name(g.get("name", "") or "gra"), sibs[plat])
+            if not ((d / (stem + ".lnk")).exists() or (d / (stem + ".url")).exists()):
                 out.append(_game_key(g))
         return out
 

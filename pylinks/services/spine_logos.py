@@ -15,7 +15,7 @@ import shutil
 import urllib.request
 from pathlib import Path
 
-from pylinks.core.spine import spine_canon_key
+from pylinks.core.spine import spine_canon_key, logo_key_for
 
 _CLOGOS_API = "https://api.github.com/repos/PRO100BYTE/console-logos/contents/"
 _CLOGOS_FULLSET = "Normal (1920x1080 max) (Full Set) v2.1"
@@ -129,8 +129,7 @@ def variant_datauri(source: str, box: int = 220) -> str | None:
 
 def install_variant(logo_dir, platform: str, source: str) -> bool:
     """Kopiuje wybrany wariant jako aktywne logo <KEY>.png."""
-    canon = spine_canon_key(platform)
-    dst = Path(logo_dir) / f"{canon}.png"
+    dst = Path(logo_dir) / f"{logo_key_for(platform)}.png"
     try:
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, dst)
@@ -148,13 +147,21 @@ def cached_styles(logo_dir) -> list:
     return [s for s in SPINE_LOGO_STYLES.values() if _style_folder(s) in have]
 
 
-def download_variants(logo_dir, style: str, progress=None) -> tuple:
-    """Pobiera CAŁY zestaw wariantów danej kolorystyki do cache. (nowe, wszystkie)."""
+def download_variants(logo_dir, style: str, progress=None, workers: int = 8) -> tuple:
+    """Pobiera zestaw wariantów danej kolorystyki do cache. (nowe, wszystkie).
+
+    Pobieranie RÓWNOLEGŁE — zestaw ma ponad 1000 plików, a szeregowo szło ~4/s,
+    czyli kilka minut, w których nie było widać żadnego postępu.
+    `progress(done, total)` może rzucić wyjątek, żeby przerwać (anulowanie).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
     cache = _variants_dir(logo_dir, style)
     try:
         cache.mkdir(parents=True, exist_ok=True)
     except Exception:
         return (0, 0)
+
     entries = []
     for sub in _CLOGOS_SUBDIRS:
         path = urllib.request.quote(f"{_CLOGOS_FULLSET}/{style}/{sub}", safe="/")
@@ -170,19 +177,34 @@ def download_variants(logo_dir, style: str, progress=None) -> tuple:
             url = e.get("download_url") if isinstance(e, dict) else None
             if nm.lower().endswith(".png") and url:
                 entries.append((nm, url))
-    total, got = len(entries), 0
-    for i, (nm, url) in enumerate(entries):
+
+    total = len(entries)
+    if not total:
+        return (0, 0)
+
+    state = {"done": 0, "got": 0, "stop": False}
+
+    def _one(item):
+        nm, url = item
         out = cache / nm
-        if out.exists():
-            continue
-        try:
-            with urllib.request.urlopen(urllib.request.Request(
-                    url, headers={"User-Agent": "Mozilla/5.0"}), timeout=25) as r:
-                b = r.read()
-            tmp = out.with_name(out.name + ".tmp"); tmp.write_bytes(b)
-            os.replace(tmp, out); got += 1
-        except Exception:
-            pass
+        if not out.exists() and not state["stop"]:
+            try:
+                with urllib.request.urlopen(urllib.request.Request(
+                        url, headers={"User-Agent": "Mozilla/5.0"}), timeout=25) as r:
+                    b = r.read()
+                tmp = out.with_name(out.name + ".tmp")
+                tmp.write_bytes(b)
+                os.replace(tmp, out)
+                state["got"] += 1
+            except Exception:
+                pass
+        state["done"] += 1
         if progress:
-            progress(i + 1, total)
-    return (got, total)
+            try:
+                progress(state["done"], total)
+            except Exception:
+                state["stop"] = True        # anulowane przez wołającego
+
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+        list(ex.map(_one, entries))
+    return (state["got"], total)

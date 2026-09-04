@@ -11,11 +11,10 @@ import json
 import threading
 import time
 import urllib.request
-from io import BytesIO
 
 from pylinks.constants import IGDB_TGDB_MATCH_MIN
 from pylinks.core.matching import name_similarity
-from pylinks.services.art import fetch, fetch_api, _to_data_uri, PIL_OK
+from pylinks.services.art import fetch_api, PIL_OK
 
 if PIL_OK:
     from PIL import Image
@@ -33,6 +32,25 @@ def fetch_post(url: str, body: bytes, hdrs: dict | None = None,
         return d or None
     except Exception:
         return None
+
+
+def _interleave(lists) -> list:
+    """Przeplata listy po jednym elemencie (round-robin), pomijając wyczerpane.
+
+    Dzięki temu jedno źródło/gra z ogromną liczbą grafik nie wypycha pozostałych.
+    """
+    out, idx = [], 0
+    lists = [x for x in lists if x]
+    while lists:
+        nxt = []
+        for L in lists:
+            if idx < len(L):
+                out.append(L[idx])
+                nxt.append(L)
+        if not nxt:
+            break
+        lists, idx = nxt, idx + 1
+    return out
 
 
 def _cand(kind: str, url: str, style: str, rid: str) -> dict | None:
@@ -99,6 +117,9 @@ class ExtraArtSources:
         self.igdb_client_secret = (src.get("igdb_client_secret", "") or "").strip()
         self.use_tgdb = bool(src.get("tgdb", False))
         self.tgdb_key = (src.get("tgdb_key", "") or "").strip()
+        # IGDB/TGDB nie mają stronicowania jak SGDB — „dociągnij więcej" tu nie
+        # zadziała, więc całą pulę bierzemy od razu. Ile: ustawienie użytkownika.
+        self.max_per_source = max(4, min(80, int(src.get("max_per_source", 12) or 12)))
         self._igdb_tok = ""
         self._igdb_tok_exp = 0.0
         self._lock = threading.Lock()
@@ -158,15 +179,24 @@ class ExtraArtSources:
         except Exception:
             return []
 
-    def igdb_candidates(self, title: str, platform: str = "PC") -> list[dict]:
+    def igdb_candidates(self, title: str, platform: str = "PC",
+                        limit: int = 12) -> list[dict]:
+        """Kandydaci z IGDB. `limit` = ile grafik maksymalnie oddać.
+
+        IGDB nie ma stronicowania jak SGDB, więc „dociągnij więcej" tu nie zadziała
+        — całą pulę trzeba wziąć od razu. Przy większym limicie bierzemy grafiki
+        także z KOLEJNYCH dobrze dopasowanych gier (inne edycje/regiony), bo jedna
+        gra oddaje najwyżej okładkę + kilka artworków i zrzutów.
+        """
         if not self.use_igdb or not self.igdb_client_id or not title:
             return []
+        limit = max(4, min(80, int(limit or 12)))
         esc = title.replace('"', '\\"')
         games = self._igdb_query(
             "games",
             f'search "{esc}"; '
             f'fields id,name,platforms,cover.url,artworks.url,screenshots.url; '
-            f'limit 12;')
+            f'limit {max(12, min(50, limit))};')
         if not games:
             return []
         named = [g for g in games
@@ -179,7 +209,7 @@ class ExtraArtSources:
         if pid is not None:
             pm = [g for g in named if pid in (g.get("platforms") or [])]
             if pm:
-                game = max(pm, key=_sim)
+                game = max(pm, key=_sim)       # zgodna platforma ma pierwszeństwo
         if game is None:
             game = max(named, key=_sim)
 
@@ -189,28 +219,34 @@ class ExtraArtSources:
                 url = "https:" + url
             return _cand("igdb", url, "igdb", rid)
 
+        # Grafiki JEDNEJ, najlepiej dopasowanej gry — mieszanie z innymi tytułami
+        # dałoby okładkę cudzej gry. Problemem jest za to skrajna nierówność
+        # kategorii w IGDB (bywa 3 artworki i 300 zrzutów): przy zwykłym „bierz po
+        # kolei" zrzuty wypychały wszystko inne. Dlatego okładka zawsze pierwsza,
+        # a resztę puli dzielimy przeplotem artwork/zrzut.
         out = []
         cover = game.get("cover")
         if cover and cover.get("url"):
             c = _img(cover["url"], f"igdb_cover_{game['id']}")
             if c:
                 out.append(c)
-        for i, art in enumerate((game.get("artworks") or [])[:4]):
-            if art.get("url"):
-                c = _img(art["url"], f"igdb_art_{game['id']}_{i}")
-                if c:
-                    out.append(c)
-        for i, ss in enumerate((game.get("screenshots") or [])[:3]):
-            if ss.get("url"):
-                c = _img(ss["url"], f"igdb_ss_{game['id']}_{i}")
-                if c:
-                    out.append(c)
-        return out
+        arts = [_img(x["url"], f"igdb_art_{game['id']}_{i}")
+                for i, x in enumerate(game.get("artworks") or []) if x.get("url")]
+        shots = [_img(x["url"], f"igdb_ss_{game['id']}_{i}")
+                 for i, x in enumerate(game.get("screenshots") or []) if x.get("url")]
+        mixed = _interleave([[c for c in arts if c], [c for c in shots if c]])
+        out += mixed[:max(0, limit - len(out))]
+        return out[:limit]
 
     # ── TheGamesDB ──────────────────────────────────────────────────────────
-    def tgdb_candidates(self, title: str, platform: str = "PC") -> list[dict]:
+    def tgdb_candidates(self, title: str, platform: str = "PC",
+                        limit: int = 12) -> list[dict]:
+        """Kandydaci z TheGamesDB. Przy wyższym limicie dopuszczamy też zrzuty
+        i ekrany tytułowe — bez tego pula kończy się na okładce, fanarcie,
+        logo i banerze."""
         if not self.use_tgdb or not self.tgdb_key or not title:
             return []
+        limit = max(4, min(80, int(limit or 12)))
         enc = urllib.request.quote(title)
         p_filter = ""
         pid = self.TGDB_PLATFORM_IDS.get((platform or "").upper())
@@ -250,8 +286,14 @@ class ExtraArtSources:
                 except Exception:
                     pass
         wanted = {"boxart", "fanart", "clearlogo", "banner"}
+        if limit > 12:
+            wanted |= {"screenshot", "titlescreen"}
+        prio = {"boxart": 0, "clearlogo": 1, "fanart": 2, "banner": 3,
+                "titlescreen": 4, "screenshot": 5}
         out = []
-        for img in images:
+        for img in sorted(images, key=lambda i: prio.get(i.get("type", ""), 9)):
+            if len(out) >= limit:
+                break
             itype, side, fn = img.get("type", ""), img.get("side", ""), img.get("filename", "")
             if itype not in wanted or not fn:
                 continue
@@ -264,10 +306,14 @@ class ExtraArtSources:
         return out
 
     # ── agregacja dla gry PC ────────────────────────────────────────────────
-    def candidates(self, title: str, appid: str = "", platform: str = "PC") -> list[dict]:
+    def candidates(self, title: str, appid: str = "", platform: str = "PC",
+                   limit: int = 0) -> list[dict]:
+        """`limit` = maks. grafik z KAŻDEGO źródła (0 → wartość z configu)."""
+        if not limit:
+            limit = self.max_per_source
         out: list[dict] = []
         if appid:
             out += self.steam_cdn_candidates(appid)
-        out += self.igdb_candidates(title, platform)
-        out += self.tgdb_candidates(title, platform)
+        out += self.igdb_candidates(title, platform, limit=limit)
+        out += self.tgdb_candidates(title, platform, limit=limit)
         return out
