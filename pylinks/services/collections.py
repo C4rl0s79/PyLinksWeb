@@ -14,6 +14,10 @@ from pylinks.core.naming import safe_name
 
 _ZW = ("​", "‌", "‍")   # ZWSP / ZWNJ / ZWJ — niewidzialne
 
+# Rozszerzenia skrótów obu systemów naraz: katalog LINKS bywa na dysku
+# dzielonym z Windowsem, więc .lnk/.url i .desktop mogą leżeć obok siebie.
+_LINK_EXTS = (".lnk", ".url", ".desktop")
+
 
 def zw_suffix(i: int) -> str:
     """Deterministyczny niewidzialny sufiks dla indeksu i (0 = brak)."""
@@ -27,7 +31,11 @@ def zw_suffix(i: int) -> str:
 
 
 def enumerate_link_games(links_dir: Path, collections_name: str = "Kolekcje") -> list:
-    """Wszystkie skróty LINKS/<platforma>/*.lnk|.url (bez folderu Kolekcje)."""
+    """Wszystkie skróty LINKS/<platforma>/ (bez folderu Kolekcje).
+
+    Rozszerzenia obu systemów naraz: katalog LINKS bywa na dysku dzielonym
+    z Windowsem, więc .lnk/.url i .desktop mogą leżeć obok siebie.
+    """
     out = []
     if not Path(links_dir).is_dir():
         return out
@@ -35,7 +43,7 @@ def enumerate_link_games(links_dir: Path, collections_name: str = "Kolekcje") ->
         if not pd.is_dir() or pd.name.lower() in (collections_name.lower(), "_collections"):
             continue
         for f in pd.iterdir():
-            if f.suffix.lower() in (".lnk", ".url"):
+            if f.suffix.lower() in _LINK_EXTS:
                 # stem bywa z doklejoną spacją (sortowanie serii w Explorerze) —
                 # w kolekcjach trzymamy i pokazujemy nazwę bez niej
                 out.append({"name": f.stem.rstrip(), "platform": pd.name,
@@ -48,11 +56,12 @@ def generate_collection(links_dir: Path, cname: str, members: list) -> dict:
     """Buduje LINKS/Kolekcje/<cname>/ z kopii skrótów. Zwraca {made, missing}."""
     coll_dir = Path(links_dir) / "Kolekcje" / safe_name(cname)
     coll_dir.mkdir(parents=True, exist_ok=True)
-    for old in list(coll_dir.glob("*.lnk")) + list(coll_dir.glob("*.url")):
-        try:
-            old.unlink()
-        except Exception:
-            pass
+    for ext in _LINK_EXTS:
+        for old in coll_dir.glob(f"*{ext}"):
+            try:
+                old.unlink()
+            except Exception:
+                pass
     by_name: dict = {}
     for m in members:
         by_name.setdefault(m["name"], []).append(m)
@@ -63,7 +72,7 @@ def generate_collection(links_dir: Path, cname: str, members: list) -> dict:
             src = None
             # plik może mieć doklejoną spację (sortowanie serii) — sprawdzamy obie formy
             for stem in (m["name"], m["name"] + " "):
-                for ext in (".lnk", ".url"):
+                for ext in _LINK_EXTS:
                     p = Path(links_dir) / m["platform"] / f"{stem}{ext}"
                     if p.exists():
                         src = p; break

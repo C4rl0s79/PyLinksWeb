@@ -9,6 +9,7 @@ dane z silnika (presety ROM, config, paleta, skan istniejących skrótów).
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.parse
 from pathlib import Path
@@ -32,6 +33,15 @@ def _write_config_atomic(raw: dict) -> None:
     import os
     tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
     tmp.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    if os.name != "nt":
+        # Na Linuksie nie ma TPM-a ani DPAPI, więc klucze API leżą w configu
+        # jawnym tekstem — odbierzmy do niego prawa przynajmniej reszcie
+        # użytkowników. Prawa nadajemy PRZED replace, żeby nie było chwili,
+        # w której gotowy plik ma domyślne 0644.
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
     os.replace(tmp, CONFIG_PATH)
 
 
@@ -172,14 +182,25 @@ def _ico_to_data_uri(ico_path: str) -> "str | None":
         return None
 
 
-def _shortcut_icon_path(f) -> str:
-    """Ścieżka .ico wskazana przez skrót (.lnk IconLocation / .url IconFile)."""
+def _ini_value(f, prefix: str) -> str:
+    """Wartość klucza z pliku w stylu INI (.url, .desktop) — pierwsze trafienie."""
     try:
-        if f.suffix.lower() == ".url":
-            for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
-                if line.lower().startswith("iconfile="):
-                    return line.split("=", 1)[1].strip()
-            return ""
+        for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
+            if line.lower().startswith(prefix):
+                return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def _shortcut_icon_path(f) -> str:
+    """Ścieżka ikony wskazanej przez skrót (.lnk / .url / .desktop)."""
+    try:
+        suf = f.suffix.lower()
+        if suf == ".url":
+            return _ini_value(f, "iconfile=")
+        if suf == ".desktop":
+            return _ini_value(f, "icon=")
         import pythoncom, win32com.client  # type: ignore
         pythoncom.CoInitialize()
         try:
@@ -191,6 +212,10 @@ def _shortcut_icon_path(f) -> str:
         return ""
 
 
+# Rozszerzenia skrótów obu systemów naraz: LINKS/ bywa na dysku dzielonym
+# z Windowsem, więc .lnk/.url i .desktop mogą tam leżeć obok siebie.
+_LINK_EXTS = (".lnk", ".url", ".desktop")
+
 _ICON_URI_CACHE: dict = {}
 
 
@@ -201,11 +226,11 @@ def _shortcut_icon_uri(f) -> "str | None":
         return _ICON_URI_CACHE[key]
     ico = ""
     try:
-        if f.suffix.lower() == ".url":
-            for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
-                if line.lower().startswith("iconfile="):
-                    ico = line.split("=", 1)[1].strip()
-                    break
+        suf = f.suffix.lower()
+        if suf == ".url":
+            ico = _ini_value(f, "iconfile=")
+        elif suf == ".desktop":
+            ico = _ini_value(f, "icon=")
         else:  # .lnk
             try:
                 import pythoncom, win32com.client  # type: ignore
@@ -314,7 +339,7 @@ class Api:
                 if not d.is_dir() or d.name.lower() in ("kolekcje", "_collections"):
                     continue
                 n = sum(1 for f in d.iterdir()
-                        if f.suffix.lower() in (".lnk", ".url"))
+                        if f.suffix.lower() in _LINK_EXTS)
                 out.append({"name": d.name, "count": n})
         return out
 
@@ -329,7 +354,7 @@ class Api:
             if not d or not d.is_dir():
                 continue
             for f in sorted(d.iterdir()):
-                if f.suffix.lower() in (".lnk", ".url"):
+                if f.suffix.lower() in _LINK_EXTS:
                     stem = f.stem
                     # Skrót arcade NIESIE nazwę zestawu w swoich argumentach —
                     # to źródło pewne. Dopasowanie po nazwie pliku jest zgadywaniem
@@ -472,6 +497,19 @@ class Api:
             # Podgląd ikony jest zapamiętywany PO ŚCIEŻCE skrótu i nigdy nie był
             # unieważniany — plik .lnk dostawał nową ikonę, a siatka pokazywała
             # w kółko starą. Stąd „pobiera się, nie wyświetla".
+            _ICON_URI_CACHE.pop(str(pth), None)
+            _log.write("links", f"ikona podmieniona: {pth.name}")
+            return {"ok": True, "icon": ico}
+        if pth.suffix.lower() == ".desktop":
+            try:                      # .desktop też jest zwykłym tekstem
+                lines = [l for l in pth.read_text(encoding="utf-8",
+                                                  errors="replace").splitlines()
+                         if not l.lower().startswith("icon=")]
+                lines.append(f"Icon={ico}")
+                pth.write_text(chr(10).join(lines) + chr(10), encoding="utf-8")
+                os.chmod(pth, 0o755)
+            except Exception as e:
+                return {"ok": False, "reason": str(e)}
             _ICON_URI_CACHE.pop(str(pth), None)
             _log.write("links", f"ikona podmieniona: {pth.name}")
             return {"ok": True, "icon": ico}
@@ -1007,7 +1045,7 @@ class Api:
                 continue                     # tej platformy nie skanowaliśmy — pomiń
             for f in sorted(d.iterdir()):
                 # stem bywa z doklejoną spacją (sortowanie serii) — porównujemy bez niej
-                if f.suffix.lower() in (".lnk", ".url") and f.stem.rstrip() not in names:
+                if f.suffix.lower() in _LINK_EXTS and f.stem.rstrip() not in names:
                     orphans.append({"name": f.stem, "platform": d.name, "path": str(f)})
         # Wpisy w bibliotece Steam nie znikają razem ze skrótem — trzeba je wskazać
         # osobno, inaczej po usunięciu gry z dysku zostaje martwa pozycja w Steamie.
@@ -1063,7 +1101,7 @@ class Api:
         for p in paths or []:
             f = Path(p)
             try:
-                if f.suffix.lower() not in (".lnk", ".url") or not f.is_file():
+                if f.suffix.lower() not in _LINK_EXTS or not f.is_file():
                     continue
                 if f.parent.parent.resolve() != LINKS_DIR.resolve():
                     continue                 # bezpieczeństwo: tylko w LINKS/*/
@@ -1127,7 +1165,7 @@ class Api:
         for plat, names in sibs.items():          # dołóż to, co JUŻ leży na dysku
             try:
                 names |= {f.stem.rstrip() for f in (LINKS_DIR / plat).iterdir()
-                          if f.suffix.lower() in (".lnk", ".url")}
+                          if f.suffix.lower() in _LINK_EXTS}
             except OSError:
                 pass
         out = []
@@ -1135,7 +1173,7 @@ class Api:
             plat = g.get("system", "") if g.get("source") == "rom" else "PC"
             d = LINKS_DIR / plat
             stem = sortable_stem(safe_name(g.get("name", "") or "gra"), sibs[plat])
-            if not ((d / (stem + ".lnk")).exists() or (d / (stem + ".url")).exists()):
+            if not any((d / (stem + ext)).exists() for ext in _LINK_EXTS):
                 out.append(_game_key(g))
         return out
 
@@ -1361,24 +1399,93 @@ class Api:
 
         `page` > 0 = kolejna porcja z SGDB („pokaż więcej"); źródła dodatkowe
         dokładamy tylko na pierwszej stronie — one nie mają stronicowania."""
+        # Wklejony ADRES OBRAZU albo ścieżka lokalna = gotowa okładka. To jedyne
+        # wyjście dla gier, których nie ma w żadnym katalogu — np. przed premierą
+        # albo w wersji demo, gdzie SteamGridDB (wkład społeczności) nic nie ma.
+        wlasna = self._own_image_candidate(query)
+        if wlasna:
+            return [wlasna]
+        # Wklejony appid albo adres sklepu Steam → grafiki z CDN Steama.
+        cdn = self._steam_cdn_candidates(cfg, query)
+        if cdn:
+            return cdn
         cands = art.candidates_for_game(cfg, g, query=query, mode=mode, page=page)
-        if mode != "steam" and not query and not page:
+        # Źródła dodatkowe dokładamy TAKŻE przy ręcznie wpisanym tytule. Wcześniej
+        # warunek brzmiał „tylko gdy nie ma zapytania", więc wpisanie nazwy —
+        # czyli dokładnie ta chwila, gdy automat zawiódł i szukasz sam — zawężało
+        # wyszukiwanie do samego SteamGridDB. Szukamy WPISANEJ frazy, nie nazwy
+        # gry: po to się ją wpisuje.
+        if mode != "steam" and not page:
+            szukaj = (query or "").strip() or g.get("name", "")
             try:
                 seen = {c["id"] for c in cands}
                 if g.get("source") == "rom":
                     from pylinks.services.extra_art import libretro_candidates
                     if (cfg.get("extra_sources", {}) or {}).get("libretro", True):
                         cands += [c for c in libretro_candidates(g.get("system", ""),
-                                                                 g.get("name", ""))
+                                                                 szukaj)
                                   if c.get("id") not in seen]
-                else:
+                if g.get("source") != "rom" or query:
                     from pylinks.services.extra_art import ExtraArtSources
-                    extra = ExtraArtSources(cfg).candidates(
-                        g.get("name", ""), str(g.get("appid") or ""), "PC")
+                    # appid podpinamy tylko przy szukaniu po nazwie własnej gry —
+                    # przy ręcznej frazie grafiki ze Steama dotyczyłyby innej gry
+                    appid = "" if query else str(g.get("appid") or "")
+                    extra = ExtraArtSources(cfg).candidates(szukaj, appid, "PC")
                     cands += [c for c in extra if c.get("id") not in seen]
             except Exception:
                 pass
         return cands
+
+    @staticmethod
+    def _own_image_candidate(query: str):
+        """Kandydat z bezpośredniego adresu obrazu albo z pliku na dysku."""
+        import base64
+        import mimetypes
+        q = (query or "").strip().strip('"')
+        if not q:
+            return None
+        low = q.lower()
+        if low.startswith(("http://", "https://")) and low.split("?")[0].endswith(
+                (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")):
+            return {"id": f"url_{abs(hash(q)) & 0xFFFFFF}", "url": q, "thumb": q,
+                    "w": 0, "h": 0, "style": "własny adres", "kind": "own",
+                    "square": False}
+        p = Path(q)
+        if p.is_file() and p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp",
+                                                ".gif", ".bmp", ".ico"):
+            try:
+                data = p.read_bytes()
+            except OSError:
+                return None
+            mime = mimetypes.guess_type(p.name)[0] or "image/png"
+            uri = f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+            return {"id": f"file_{p.stem[:40]}", "url": uri, "thumb": uri,
+                    "w": 0, "h": 0, "style": "plik z dysku", "kind": "own",
+                    "square": False}
+        return None
+
+    @staticmethod
+    def _steam_cdn_candidates(cfg: dict, query: str):
+        """Grafiki z CDN Steama dla wklejonego appid albo adresu sklepu.
+
+        Gra przed premierą albo demo bywa już na Steamie — a wtedy ma komplet
+        grafik, których katalogi społecznościowe jeszcze nie mają.
+        """
+        import re as _re
+        q = (query or "").strip()
+        if not q:
+            return None
+        # Goła liczba to od zawsze IDENTYFIKATOR SteamGridDB — nie wolno jej tu
+        # przejąć. Appid Steama wymaga więc wyraźnego przedrostka albo adresu sklepu.
+        m = (_re.search(r"store[.]steampowered[.]com/app/([0-9]+)", q)
+             or _re.fullmatch(r"steam:[ ]*([0-9]+)", q))
+        if not m:
+            return None
+        try:
+            from pylinks.services.extra_art import ExtraArtSources
+            return ExtraArtSources(cfg).steam_cdn_candidates(m.group(1)) or None
+        except Exception:
+            return None
 
     def _restore_by_source_id(self, cfg: dict, key: str, g: dict,
                               mode: str = "icon") -> bool:
@@ -1830,6 +1937,11 @@ class Api:
         from pylinks.core import secure
         out = {"backend": secure.backend(), "dpapi": secure.available(),
                "tpm_present": None, "tpm_enabled": None, "tpm_ready": None}
+        if os.name != "nt":
+            # Linux nie ma odpowiednika TPM/DPAPI w tej roli — sekrety leżą
+            # w configu z prawami 0600 (patrz _write_config_atomic).
+            out["backend"] = "posix-file"
+            return out
         try:
             import subprocess
             si = subprocess.STARTUPINFO()
@@ -2024,7 +2136,18 @@ class Api:
 
         COM inicjalizujemy TUTAJ, a nie liczymy na stan wątku: przy pustym wyniku
         wykrywanie kolizji nazw milcząco przepuszczało nadpisanie cudzego skrótu.
+        Na Linuksie skrót to .desktop — zwykły tekst, wystarczy przeczytać Exec=.
         """
+        if str(path).lower().endswith(".desktop"):
+            exec_line = _ini_value(Path(path), "exec=")
+            if not exec_line:
+                return ""
+            try:
+                import shlex
+                argv = shlex.split(exec_line)
+            except ValueError:
+                return ""
+            return argv[-1] if argv else ""
         try:
             import pythoncom, win32com.client  # type: ignore
         except Exception:
@@ -2163,16 +2286,16 @@ class Api:
                         try:
                             out_dir.mkdir(parents=True, exist_ok=True)
                             nm = safe_name(title)
-                            dst = out_dir / f"{nm}.lnk"
+                            dst = out_dir / f"{nm}{_exp.SHORTCUT_EXT}"
                             # Ta sama oczyszczona nazwa bywa zajęta przez INNĄ grę:
                             # „Tetris" to 7 osobnych automatów, a „Trivial Pursuit"
                             # 9 edycji. Wtedy wracamy do PEŁNEGO tytułu — nawias
                             # niesie wtedy sens („Genus II Edition"), w odróżnieniu
                             # od nazwy zestawu, która nic nie mówi.
                             if dst.exists() and self._lnk_set(dst) not in ("", st):
-                                dst = out_dir / f"{safe_name(full_title)}.lnk"
+                                dst = out_dir / f"{safe_name(full_title)}{_exp.SHORTCUT_EXT}"
                                 if dst.exists() and self._lnk_set(dst) not in ("", st):
-                                    dst = out_dir / f"{safe_name(full_title)} ({st}).lnk"
+                                    dst = out_dir / f"{safe_name(full_title)} ({st}){_exp.SHORTCUT_EXT}"
                             # -rompath MUSI być w skrócie. Wcześniej szedł sam
                             # set, przy założeniu że katalog do grania jest
                             # domyślnym `roms` MAME — a on jest konfigurowalny

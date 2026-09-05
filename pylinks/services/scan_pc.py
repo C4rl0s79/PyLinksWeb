@@ -27,6 +27,43 @@ except Exception:  # nie-Windows / brak modułu
     winreg = None  # type: ignore
     WINREG_OK = False
 
+IS_WIN = os.name == "nt"
+
+# Katalogi danych Steama na Linuksie. Nie ma tam rejestru, a binarka `steam`
+# leży w /usr/bin — czyli NIE obok bibliotek gier, jak na Windows. Dlatego
+# korzeń Steama wyszukujemy osobno, po znanych lokalizacjach (instalacja
+# natywna, stary układ ~/.steam, Flatpak, Snap).
+_LINUX_STEAM_ROOTS = (
+    "~/.steam/steam",
+    "~/.local/share/Steam",
+    "~/.steam/root",
+    "~/.var/app/com.valvesoftware.Steam/.local/share/Steam",
+    "~/snap/steam/common/.local/share/Steam",
+)
+
+
+def steam_data_roots(steam_exe: str = "") -> list[Path]:
+    """Korzenie instalacji Steama — katalogi, w których leżą steamapps/ i config/."""
+    out: list[Path] = []
+    seen: set[str] = set()
+
+    def _add(p: Path) -> None:
+        try:
+            if p.is_dir():
+                k = str(p).lower()
+                if k not in seen:
+                    seen.add(k)
+                    out.append(p)
+        except OSError:
+            pass
+
+    if steam_exe and IS_WIN:
+        _add(Path(steam_exe).parent)
+    if not IS_WIN:
+        for raw in _LINUX_STEAM_ROOTS:
+            _add(Path(raw).expanduser())
+    return out
+
 
 # ── rejestr: helper ────────────────────────────────────────────────────────
 def _reg_val(handle, name: str):
@@ -41,7 +78,15 @@ def _reg_val(handle, name: str):
 
 # ── Steam: detekcja + biblioteki ───────────────────────────────────────────
 def detect_steam_exe() -> str | None:
-    """Znajduje Steam.exe w rejestrze (HKCU/HKLM)."""
+    """Znajduje binarkę Steama: rejestr na Windows, PATH na Linuksie.
+
+    Na Linuksie brak wyniku NIE oznacza braku Steama — przy instalacji przez
+    Flatpaka nie ma binarki w PATH, a gry i tak uruchamia się adresem
+    `steam://rungameid/…` przez xdg-open (patrz services.export).
+    """
+    if not IS_WIN:
+        import shutil
+        return shutil.which("steam")
     if not WINREG_OK:
         return None
     paths = [
@@ -62,30 +107,34 @@ def detect_steam_exe() -> str | None:
 
 
 def parse_libraryfolders_vdf(steam_exe: str) -> list[str]:
-    """Parsuje libraryfolders.vdf → lista katalogów steamapps."""
-    try:
-        root = Path(steam_exe).parent
-        vdf = root / "steamapps" / "libraryfolders.vdf"
-        if not vdf.exists():
-            vdf = root / "config" / "libraryfolders.vdf"
-        if not vdf.exists():
-            return []
-        txt = vdf.read_text(encoding="utf-8", errors="replace")
-        libs: list[str] = []
-        for m in re.finditer(r'"path"\s+"((?:[^"\\]|\\.)*)"', txt):
-            raw = m.group(1).replace("\\\\", "\\")
-            lib = Path(raw) / "steamapps"
-            if lib.is_dir():
-                libs.append(str(lib))
-        seen: set[str] = set()
-        out: list[str] = []
-        for p in libs:
-            if p.lower() not in seen:
-                seen.add(p.lower())
-                out.append(p)
-        return out
-    except Exception:
-        return []
+    """Parsuje libraryfolders.vdf → lista katalogów steamapps.
+
+    Przeszukuje każdy znany korzeń Steama, bo na Linuksie może ich być kilka
+    (natywny i Flatpak obok siebie), a `steam_exe` nic o nich nie mówi.
+    """
+    libs: list[str] = []
+    for root in steam_data_roots(steam_exe):
+        try:
+            vdf = root / "steamapps" / "libraryfolders.vdf"
+            if not vdf.exists():
+                vdf = root / "config" / "libraryfolders.vdf"
+            if not vdf.exists():
+                continue
+            txt = vdf.read_text(encoding="utf-8", errors="replace")
+            for m in re.finditer(r'"path"\s+"((?:[^"\\]|\\.)*)"', txt):
+                raw = m.group(1).replace("\\\\", "\\")
+                lib = Path(raw) / "steamapps"
+                if lib.is_dir():
+                    libs.append(str(lib))
+        except Exception:
+            continue
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in libs:
+        if p.lower() not in seen:
+            seen.add(p.lower())
+            out.append(p)
+    return out
 
 
 class SteamScanner:
@@ -114,11 +163,11 @@ class SteamScanner:
             except Exception:
                 pass
 
-        if self.steam_exe:
-            _add(Path(self.steam_exe).parent / "steamapps")
-            if self.use_libraryfolders_vdf:
-                for lib in parse_libraryfolders_vdf(self.steam_exe):
-                    _add(Path(lib))
+        for root in steam_data_roots(self.steam_exe):
+            _add(root / "steamapps")
+        if self.use_libraryfolders_vdf:
+            for lib in parse_libraryfolders_vdf(self.steam_exe):
+                _add(Path(lib))
         for part in self.extra_lib_dirs:
             _add(Path(part))
         return dirs
@@ -179,9 +228,50 @@ class SteamScanner:
 
 # ── Epic / GOG / Extra ─────────────────────────────────────────────────────
 def _epic_manifests_dir() -> Path | None:
+    if not IS_WIN:
+        return None          # brak launchera Epica na Linuksa — patrz _legendary_installed
     pd = os.environ.get("PROGRAMDATA") or r"C:\ProgramData"
     d = Path(pd) / "Epic" / "EpicGamesLauncher" / "Data" / "Manifests"
     return d if d.is_dir() else None
+
+
+# Epic nie wydał launchera na Linuksa; gry z Epica instaluje tam Heroic albo
+# legendary (CLI), które trzymają stan w tym samym formacie installed.json.
+_LEGENDARY_INSTALLED = (
+    "~/.config/legendary/installed.json",
+    "~/.config/heroic/legendaryConfig/legendary/installed.json",
+    "~/.var/app/com.heroicgameslauncher.hgl/config/heroic/legendaryConfig/legendary/installed.json",
+)
+
+
+def _scan_epic_linux() -> list[dict]:
+    """Gry Epica zainstalowane przez Heroic/legendary."""
+    games: list[dict] = []
+    seen: set[str] = set()
+    for raw in _LEGENDARY_INSTALLED:
+        f = Path(raw).expanduser()
+        if not f.is_file():
+            continue
+        try:
+            data = json.loads(f.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        for app_name, entry in data.items():
+            if not isinstance(entry, dict) or app_name in seen:
+                continue
+            install = entry.get("install_path") or ""
+            if not install or not _install_present(install):
+                continue
+            seen.add(app_name)
+            exe = entry.get("executable") or ""
+            games.append(_mk_game(
+                name=entry.get("title") or app_name, source="epic",
+                game_dir=install,
+                launch_exe=str(Path(install) / exe.replace("\\", "/")) if exe else None,
+                epic_app_name=app_name))
+    return games
 
 
 def _install_present(*paths) -> bool:
@@ -214,6 +304,8 @@ def _install_present(*paths) -> bool:
 
 
 def scan_epic_games() -> list[dict]:
+    if not IS_WIN:
+        return _scan_epic_linux()
     games: list[dict] = []
     d = _epic_manifests_dir()
     if not d:
@@ -241,8 +333,83 @@ def scan_epic_games() -> list[dict]:
     return games
 
 
+# Gdzie lądują gry GOG-a na Linuksie: domyślny katalog instalatora MojoSetup,
+# katalog używany przez GOG Library Managera i biblioteka Heroica.
+_LINUX_GOG_DIRS = ("~/GOG Games", "~/GOG/games", "~/Games/gog")
+_LINUX_GOG_HEROIC = (
+    "~/.config/heroic/gog_store/installed.json",
+    "~/.var/app/com.heroicgameslauncher.hgl/config/heroic/gog_store/installed.json",
+)
+
+
+def _gog_dir_entry(d: Path) -> dict | None:
+    """Katalog gry GOG-a na Linuksie → wpis gry (albo None, gdy to nie gra).
+
+    Natywne wydanie ma w korzeniu `start.sh`; identyfikator i tytuł bierzemy
+    z `goggame-<id>.info`, gdy instalator go zostawił.
+    """
+    start = d / "start.sh"
+    if not start.is_file():
+        return None
+    gid, name = "", d.name
+    info = next(iter(sorted(d.glob("goggame-*.info"))), None)
+    if info is not None:
+        try:
+            data = json.loads(info.read_text(encoding="utf-8", errors="replace"))
+            gid = str(data.get("gameId") or "")
+            name = data.get("name") or name
+        except (OSError, json.JSONDecodeError, AttributeError):
+            pass
+        if not gid:
+            m = re.search(r"goggame-(\d+)\.info$", info.name)
+            gid = m.group(1) if m else ""
+    return _mk_game(name=name, source="gog", game_dir=str(d),
+                    launch_exe=str(start), gog_id=gid or d.name)
+
+
+def _scan_gog_linux() -> list[dict]:
+    games: list[dict] = []
+    seen: set[str] = set()
+    for raw in _LINUX_GOG_DIRS:
+        root = Path(raw).expanduser()
+        if not root.is_dir():
+            continue
+        try:
+            subdirs = sorted(p for p in root.iterdir() if p.is_dir())
+        except OSError:
+            continue
+        for d in subdirs:
+            g = _gog_dir_entry(d)
+            if g and str(g.get("gog_id")) not in seen:
+                seen.add(str(g.get("gog_id")))
+                games.append(g)
+    for raw in _LINUX_GOG_HEROIC:
+        f = Path(raw).expanduser()
+        if not f.is_file():
+            continue
+        try:
+            data = json.loads(f.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for entry in (data.get("installed") or []):
+            if not isinstance(entry, dict):
+                continue
+            gid = str(entry.get("appName") or "")
+            install = entry.get("install_path") or ""
+            if not gid or gid in seen or not _install_present(install):
+                continue
+            seen.add(gid)
+            start = Path(install) / "start.sh"
+            games.append(_mk_game(
+                name=Path(install).name, source="gog", game_dir=install or None,
+                launch_exe=str(start) if start.is_file() else None, gog_id=gid))
+    return games
+
+
 def scan_gog_games() -> list[dict]:
-    """Gry GOG z rejestru (HKLM/HKCU ...\\GOG.com\\Games)."""
+    """Gry GOG: rejestr na Windows, katalogi instalacji + Heroic na Linuksie."""
+    if not IS_WIN:
+        return _scan_gog_linux()
     if not WINREG_OK:
         return []
     games: list[dict] = []
@@ -371,7 +538,10 @@ def scan_pc_library(cfg: dict, *, resolve_dirs: bool = True) -> dict:
         use_web_api=cfg.get("use_steam_web_api", True),
     )
 
-    steam_games = scanner.scan_installed() if steam_exe else []
+    # Na Linuksie Steam bywa bez binarki w PATH (Flatpak/Snap) — o skanie
+    # decyduje obecność katalogu danych, nie ścieżka do launchera.
+    have_steam = bool(steam_exe) or bool(steam_data_roots(steam_exe))
+    steam_games = scanner.scan_installed() if have_steam else []
     if resolve_dirs:
         for g in steam_games:
             gd = scanner.resolve_game_dir(g)

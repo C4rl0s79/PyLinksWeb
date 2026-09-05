@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import urllib.request
 from io import BytesIO
@@ -264,6 +265,28 @@ def make_ico_bytes(square_img,
     frames[0].save(buf, format="ICO", sizes=[(s, s) for s in sizes],
                    append_images=frames[1:])
     return buf.getvalue()
+
+
+# Format ikony skrótu per system: .ico rozumie tylko powłoka Windows, klucz
+# Icon= w pliku .desktop chce zwykłego PNG.
+ICON_EXT = ".ico" if os.name == "nt" else ".png"
+
+
+def make_png_bytes(square_img, size: int = 256) -> bytes:
+    """Kwadratowy obraz PIL → PNG (domyślnie 256 px)."""
+    img = square_img.convert("RGBA")
+    if img.size != (size, size):
+        img = img.resize((size, size), Image.LANCZOS)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def make_icon_bytes(square_img) -> bytes:
+    """Ikona w formacie właściwym dla bieżącego systemu (patrz ICON_EXT)."""
+    if ICON_EXT == ".ico":
+        return make_ico_bytes(square_img)
+    return make_png_bytes(square_img)
 
 
 # ── okładka dla gry (z cache dyskowym, per tryb) ───────────────────────────

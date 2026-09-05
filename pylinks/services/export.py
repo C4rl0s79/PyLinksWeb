@@ -1,12 +1,17 @@
-"""services.export — tworzenie skrótów (.lnk/.url) z ikonami .ico.
+"""services.export — tworzenie skrótów z ikonami.
 
-Port z wersji tkinter: pieczenie .ico (kadr + grzbiet), ShortcutCreator per
+Port z wersji tkinter: pieczenie ikony (kadr + grzbiet), ShortcutCreator per
 źródło (Steam/GOG/Epic/Extra/ROM), orkiestracja do LINKS/<platforma>/.
-Windows-only dla .lnk (pywin32); .url działa wszędzie.
+
+Format skrótu zależy od systemu:
+  Windows — .lnk przez pywin32/COM, .url dla adresów (steam:// itp.).
+  Linux   — .desktop (freedesktop) w obu przypadkach; adres uruchamiany
+            przez xdg-open, bo .url to format powłoki Windows.
 """
 
 from __future__ import annotations
 
+import os
 import re
 
 import json
@@ -17,6 +22,12 @@ from pylinks.core import discs as _discs
 from pylinks.core.rom_args import _rom_build_args
 from pylinks.core import spine as _spine
 from pylinks.services import art as _art
+
+IS_WIN = os.name == "nt"
+# Rozszerzenie skrótu do gry uruchamianej programem (nie adresem).
+SHORTCUT_EXT = ".lnk" if IS_WIN else ".desktop"
+# Rozszerzenie skrótu do adresu (steam://, com.epicgames.launcher://…).
+URL_EXT = ".url" if IS_WIN else ".desktop"
 
 try:
     import win32com.client  # type: ignore
@@ -79,18 +90,85 @@ def bake_ico(cache_dir: Path, key: str, fit: str, offset: float,
     if img is None:
         return None
     try:
-        return _art.make_ico_bytes(img)
+        return _art.make_icon_bytes(img)      # .ico na Windows, .png na Linuksie
     except Exception:
         return None
 
 
 # ── skróty ─────────────────────────────────────────────────────────────────
+def _desktop_quote(token: str) -> str:
+    """Jeden argument linii Exec= wg specyfikacji Desktop Entry.
+
+    Token idzie w cudzysłowach, znaki specjalne powłoki dostają backslash,
+    a literalny procent musi być podwojony (pojedynczy `%` to pole typu %f).
+    """
+    out = token.replace("\\", "\\\\")
+    for ch in ('"', "`", "$"):
+        out = out.replace(ch, "\\" + ch)
+    return '"' + out.replace("%", "%%") + '"'
+
+
+def _write_desktop(dst: str, name: str, exec_line: str, icon: str = "",
+                   work_dir: str = "") -> bool:
+    """Zapisuje plik .desktop atomowo i z bitem wykonywalnym.
+
+    Bez `chmod +x` GNOME/KDE pokazują skrót jako plik tekstowy zamiast go
+    uruchamiać. Zapis idzie przez plik tymczasowy obok celu, żeby przerwany
+    eksport nie zostawił połówki skrótu.
+    """
+    def _val(text: str) -> str:
+        return text.replace("\\", "\\\\").replace("\n", " ").replace("\r", " ").strip()
+
+    lines = [
+        "[Desktop Entry]",
+        "Type=Application",
+        "Version=1.0",
+        f"Name={_val(name)}",
+        f"Exec={exec_line}",
+        "Terminal=false",
+        "StartupNotify=true",
+        "Categories=Game;",
+    ]
+    if work_dir and Path(work_dir).is_dir():
+        lines.insert(5, f"Path={_val(work_dir)}")
+    if icon:
+        lines.append(f"Icon={_val(icon)}")
+    p = Path(dst)
+    tmp = p.with_name(f".{p.name}.tmp")
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, p)
+        return True
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+
+
 class ShortcutCreator:
     def __init__(self, steam_exe: str = ""):
         self.steam_exe = steam_exe
 
+    def make_desktop(self, dst: str, target: str, args: str, icon: str,
+                     work_dir: str = "") -> bool:
+        """Odpowiednik make_lnk na Linuksie: skrót .desktop do programu."""
+        import shlex
+        try:
+            argv = shlex.split(args) if args else []
+        except ValueError:
+            return False        # niedomknięty cudzysłów → lepiej nie zgadywać
+        exec_line = " ".join([_desktop_quote(target)]
+                             + [_desktop_quote(a) for a in argv])
+        return _write_desktop(dst, Path(dst).stem, exec_line, icon, work_dir)
+
     def make_lnk(self, dst: str, target: str, args: str, icon: str,
                  work_dir: str = "") -> bool:
+        if not IS_WIN:
+            return self.make_desktop(dst, target, args, icon, work_dir)
         if not WIN32COM:
             return False
         _co = False
@@ -122,6 +200,12 @@ class ShortcutCreator:
                     pass
 
     def make_url(self, dst: str, url: str, icon: str) -> bool:
+        if not IS_WIN:
+            # .url to format powłoki Windows — na Linuksie adres (steam://,
+            # com.epicgames.launcher://) podajemy xdg-openowi, który znajdzie
+            # zarejestrowany handler protokołu.
+            exec_line = f'"xdg-open" {_desktop_quote(url)}'
+            return _write_desktop(dst, Path(dst).stem, exec_line, icon)
         try:
             Path(dst).write_text(
                 f"[InternetShortcut]\nURL={url}\nIconFile={icon}\nIconIndex=0\n",
@@ -132,6 +216,10 @@ class ShortcutCreator:
 
     def copy_lnk_with_icon(self, src: str, dst: str, icon: str) -> bool:
         """Kopiuje gotowy .lnk (np. RPCS3/PS3) i podmienia ikonę."""
+        if not IS_WIN:
+            # .lnk to binarny format powłoki Windows — bez COM-a nie da się go
+            # ani przeczytać, ani przestemplować, a skopiowany byłby martwy.
+            return False
         import shutil
         try:
             shutil.copy2(src, dst)
@@ -306,7 +394,7 @@ def export_games(cfg: dict, games: list[dict], cache_dir: Path,
             existing = set()
             try:
                 existing = {f.stem.rstrip() for f in out_dir.iterdir()
-                            if f.suffix.lower() in (".lnk", ".url")}
+                            if f.suffix.lower() in (".lnk", ".url", ".desktop")}
             except Exception:
                 pass
             _sibs[plat] = existing | {safe_name(x.get("name", "") or "gra")
@@ -331,12 +419,14 @@ def export_games(cfg: dict, games: list[dict], cache_dir: Path,
 
         ok = False
         if launch["kind"] == "url":
-            ok = creator.make_url(str(out_dir / f"{name}.url"), launch["url"], ico_path)
+            ok = creator.make_url(str(out_dir / f"{name}{URL_EXT}"),
+                                  launch["url"], ico_path)
         elif launch["kind"] == "copy":
-            ok = creator.copy_lnk_with_icon(launch["src"],
-                                            str(out_dir / f"{name}.lnk"), ico_path)
-        else:  # lnk
-            ok = creator.make_lnk(str(out_dir / f"{name}.lnk"), launch["target"],
+            ok = creator.copy_lnk_with_icon(
+                launch["src"], str(out_dir / f"{name}{SHORTCUT_EXT}"), ico_path)
+        else:  # skrót do programu
+            ok = creator.make_lnk(str(out_dir / f"{name}{SHORTCUT_EXT}"),
+                                  launch["target"],
                                   launch.get("args", ""), ico_path,
                                   launch.get("work_dir", ""))
         if ok:
@@ -393,18 +483,19 @@ def write_cache_ico(icons_dir: Path, key: str, data: bytes) -> str:
     tego samego klucza są sprzątane.
     """
     import hashlib
+    ext = _art.ICON_EXT
     icons_dir.mkdir(parents=True, exist_ok=True)
     stem = _safe_ico(key)
-    target = icons_dir / f"{stem}_{hashlib.md5(data).hexdigest()[:10]}.ico"
+    target = icons_dir / f"{stem}_{hashlib.md5(data).hexdigest()[:10]}{ext}"
     if not target.exists():
         target.write_bytes(data)
-    for old in icons_dir.glob(f"{stem}_*.ico"):   # sprzątnij poprzednie warianty
+    for old in icons_dir.glob(f"{stem}_*{ext}"):  # sprzątnij poprzednie warianty
         if old != target:
             try:
                 old.unlink()
             except Exception:
                 pass
-    legacy = icons_dir / f"{stem}.ico"            # nazwa sprzed poprawki
+    legacy = icons_dir / f"{stem}{ext}"           # nazwa sprzed poprawki
     if legacy.exists():
         try:
             legacy.unlink()

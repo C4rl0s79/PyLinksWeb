@@ -1678,10 +1678,18 @@ async function openSettings(){
   el("s_ss").checked = !!sset.screenscraper;
   el("s_secnote").textContent = "🔒 szyfrowane lokalnie";
   api("security_status").then(s => {
-    const b = s.backend === "tpm" ? "TPM (sprzętowy)" : (s.backend === "dpapi" ? "Windows DPAPI" : "brak");
+    // Linux nie ma odpowiednika TPM/DPAPI — sekrety leżą w configu jawnie,
+    // z prawami 0600. Mówimy to wprost, zamiast pisać „szyfrowane".
+    const BACKENDS = {
+      "tpm": "TPM (sprzętowy)",
+      "dpapi": "Windows DPAPI",
+      "posix-file": "plik 0600 (bez szyfrowania)",
+    };
+    const b = BACKENDS[s.backend] || "brak";
     let t = "";
     if (s.tpm_present != null) t = ` • TPM: ${s.tpm_present ? (s.tpm_ready ? "gotowy" : "obecny") : "brak"}`;
-    el("s_secnote").textContent = `🔒 szyfrowane: ${b}${t}`;
+    const label = s.backend === "posix-file" ? "zapisane" : "szyfrowane";
+    el("s_secnote").textContent = `🔒 ${label}: ${b}${t}`;
   }).catch(()=>{});
   el("setMsg").textContent = "";
   el("setModal").hidden = false;

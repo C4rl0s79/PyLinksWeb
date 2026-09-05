@@ -91,11 +91,17 @@ def find_userdata_configs(steam_exe: str = "", override: str = "") -> list:
     if override and Path(override).is_dir():
         return [Path(override)]
     bases = []
-    if steam_exe:
-        bases.append(Path(steam_exe).parent / "userdata")
-    bases += [Path(os.environ.get("LOCALAPPDATA", "C:/")) / "Steam" / "userdata",
-              Path("C:/Program Files (x86)/Steam/userdata"),
-              Path("C:/Program Files/Steam/userdata")]
+    if os.name == "nt":
+        if steam_exe:
+            bases.append(Path(steam_exe).parent / "userdata")
+        bases += [Path(os.environ.get("LOCALAPPDATA", "C:/")) / "Steam" / "userdata",
+                  Path("C:/Program Files (x86)/Steam/userdata"),
+                  Path("C:/Program Files/Steam/userdata")]
+    else:
+        # Linux: binarka steam leży w /usr/bin, więc userdata szukamy przy
+        # katalogach DANYCH Steama (natywny / Flatpak / Snap), nie przy exe.
+        from pylinks.services.scan_pc import steam_data_roots
+        bases += [r / "userdata" for r in steam_data_roots(steam_exe)]
     out = []
     seen = set()
     for base in bases:
@@ -110,6 +116,20 @@ def find_userdata_configs(steam_exe: str = "", override: str = "") -> list:
 
 
 def is_steam_running() -> bool:
+    """Czy Steam działa (wtedy nie wolno pisać do shortcuts.vdf — nadpisze)."""
+    if os.name != "nt":
+        # Linux: brak rejestru. Steam zostawia pid w ~/.steam/steam.pid, ale
+        # plik przeżywa nieczyste zamknięcie — więc pid weryfikujemy w /proc.
+        for raw in ("~/.steam/steam.pid", "~/.steam/root/steam.pid",
+                    "~/.var/app/com.valvesoftware.Steam/.steam/steam.pid"):
+            try:
+                pid = int(Path(raw).expanduser()
+                          .read_text(encoding="utf-8", errors="replace").strip())
+            except (OSError, ValueError):
+                continue
+            if pid > 0 and Path(f"/proc/{pid}").is_dir():
+                return True
+        return False
     try:
         import winreg
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
@@ -162,6 +182,8 @@ def _tags_for(game: dict) -> list:
 def _build_entry(game: dict, launch: dict, icon_path: str = ""):
     """launch = wynik export._launch_for. Zwraca (entry, appid, platform_tag)."""
     if launch["kind"] == "copy":                 # PS3 .lnk → rozwiń
+        if os.name != "nt":
+            return None, 0, ""                   # .lnk czyta tylko powłoka Windows
         try:
             import pythoncom, win32com.client  # type: ignore
             pythoncom.CoInitialize()

@@ -3,6 +3,74 @@
 Wszystkie istotne zmiany w PyLinksWeb. Format oparty na
 [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/).
 
+## [9.18.0] — 2026-09-04
+
+### Dodane — wsparcie dla Linuksa (paczka źródłowa, bez binarki)
+- **Skróty `.desktop`** zamiast `.lnk`/`.url`. Argumenty cytowane wg
+  specyfikacji Desktop Entry (spacje, `"`, `` ` ``, `$`, literalny `%` jako
+  `%%` — inaczej `Sim City 100%` startowałby z podstawionym polem `%f`),
+  zapis atomowy i z bitem wykonywalnym (bez `chmod +x` GNOME/KDE pokazują
+  skrót jako plik tekstowy). Skróty do adresów (`steam://`,
+  `com.epicgames.launcher://`) to `.desktop` z `Exec=xdg-open <adres>`.
+- **Skan bibliotek PC bez rejestru**: Steam po katalogach danych
+  (`~/.steam/steam`, `~/.local/share/Steam`, Flatpak, Snap) — brak binarki
+  `steam` w PATH nie blokuje już skanu; GOG po katalogach instalacji
+  (rozpoznanie po `start.sh`) i po bibliotece Heroica; Epic po `installed.json`
+  Heroica/legendary, bo launchera Epica na Linuksa nie ma.
+- **Wykrywanie emulatorów na Linuksie**: kandydaci w katalogu emulatorów po
+  bicie wykonywalnym (z odsianiem danych i bibliotek), plus `PATH` — również
+  pod nazwami z sufiksem interfejsu (`pcsx2-qt`, `mgba-qt`, `dolphin-emu`).
+  Rdzenie RetroArcha także z `~/.config/retroarch/cores`, katalogu Flatpaka
+  i `/usr/lib/libretro`.
+- **Paczka `PyLinksWeb-<wersja>-linux.zip`**: źródła + `install.sh` (venv
+  z `--system-site-packages`, zależności, wykrycie backendu GTK/Qt, opcjonalny
+  wpis w menu przez `--desktop`), `run.sh`, `requirements-linux.txt` i `DEPS.md`
+  z komendami per dystrybucja. Buduje `build_linux.ps1` — skrypty trafiają do
+  archiwum z LF i trybem 0755, stan użytkownika (`config.json`, `Cache/`,
+  `LINKS/`) nie.
+
+### Zmienione
+- **Ikony na Linuksie to `.png`** (256 px) zamiast `.ico` — tego wymaga klucz
+  `Icon=` w `.desktop`. Pieczenie okładki (kadr, grzbiet platformy) bez zmian.
+- **Odczyt i podmiana ikony skrótu** rozumie `.desktop` (klucz `Icon=`) obok
+  `.url` i `.lnk`; wykrywanie osieroconych skrótów i kolekcje widzą wszystkie
+  trzy rozszerzenia naraz — katalog `LINKS/` bywa na dysku dzielonym z Windowsem.
+- **Eksport do Steama**: działającą instancję wykrywamy na Linuksie po
+  `~/.steam/steam.pid` zweryfikowanym w `/proc` (sam plik przeżywa nieczyste
+  zamknięcie), a `userdata/` szukamy przy katalogach danych, nie przy binarce.
+  Gry PS3 dodane jako gotowe `.lnk` z RPCS3 są pomijane — tego formatu nie da
+  się odczytać poza Windowsem.
+- **Sekrety na Linuksie**: bez TPM-a i DPAPI (nie mają tam odpowiednika) —
+  `config.json` zapisywany z prawami `0600`, a okno Ustawień mówi wprost
+  „plik 0600 (bez szyfrowania)” zamiast obiecywać szyfrowanie. Ścieżka
+  windowsowa (TPM → DPAPI) bez zmian.
+
+## [9.18.0] — 2026-09-05
+
+### Naprawione
+- **Wpisanie nazwy w oknie wyboru zawężało szukanie do samego SteamGridDB.**
+  Źródła dodatkowe (IGDB / TheGamesDB / Libretro) dokładane były wyłącznie wtedy,
+  gdy pole zapytania było PUSTE — czyli odcinane dokładnie w chwili, gdy automat
+  zawiódł i szukasz ręcznie. Do tego szukały nazwy gry, a nie wpisanej frazy.
+  Teraz dokładają się także przy ręcznym zapytaniu i szukają tego, co wpiszesz.
+
+  Ma to znaczenie dla gier PRZED PREMIERĄ i wersji demo: SteamGridDB żyje
+  z wkładu społeczności i takich tytułów praktycznie nie ma, a IGDB jest
+  katalogiem zapowiedzi. Na „Final Fantasy Resonance" doszło **19 trafień
+  z IGDB**, których wcześniej w ogóle nie było widać.
+
+### Dodane
+- **Pole wyszukiwania przyjmuje teraz cztery rodzaje wejścia** — dla gier,
+  których nie ma w żadnym katalogu:
+  * nazwa (jak dotąd) albo link/ID SteamGridDB,
+  * **bezpośredni adres obrazu** (`.png/.jpg/.webp/.gif/.bmp`),
+  * **ścieżka do pliku na dysku** — własna grafika bez żadnego portalu,
+  * **`steam:<appid>` albo adres sklepu Steam** → komplet grafik z CDN Steama
+    (demo bywa na Steamie, zanim trafi do katalogów społecznościowych).
+
+  Goła liczba nadal znaczy identyfikator SteamGridDB — appid Steama wymaga
+  przedrostka, żeby nie przejąć dotychczasowego zachowania.
+
 ## [9.17.0] — 2026-08-31
 
 ### Dodane

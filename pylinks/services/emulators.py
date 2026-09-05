@@ -8,11 +8,72 @@ Po wskazaniu wspólnych folderów ROM/emulatorów:
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
 from pylinks.roms.presets import ROM_SYSTEM_PRESETS
 from pylinks.core.spine import spine_canon_key
+
+IS_WIN = os.name == "nt"
+
+# Na Linuksie binarki nie mają rozszerzenia — rozpoznajemy je po bicie
+# wykonywalnym, więc trzeba odsiać dane i biblioteki, które ten bit też miewają
+# (rozpakowane archiwa nagminnie mają 0755 na wszystkim).
+_NOT_EXE_SUFFIXES = frozenset({
+    ".so", ".dll", ".dat", ".txt", ".md", ".json", ".xml", ".cfg", ".ini",
+    ".png", ".jpg", ".jpeg", ".svg", ".zip", ".7z", ".gz", ".xz", ".chd",
+    ".iso", ".bin", ".cue", ".ttf", ".otf", ".desktop", ".log", ".vdf",
+    ".sqlite", ".db", ".pak", ".qm", ".yml", ".yaml", ".toml",
+})
+
+
+def _emu_binaries(base: Path, limit: int = 3000) -> list:
+    """Kandydaci na binarkę emulatora w katalogu emulatorów (do 3 poziomów)."""
+    out: list = []
+    pats = (("*.exe", "*/*.exe", "*/*/*.exe") if IS_WIN
+            else ("*", "*/*", "*/*/*"))
+    for pat in pats:
+        try:
+            for p in base.glob(pat):
+                if not p.is_file():
+                    continue
+                if not IS_WIN:
+                    if p.suffix.lower() in _NOT_EXE_SUFFIXES:
+                        continue
+                    if not os.access(p, os.X_OK):
+                        continue
+                out.append(p)
+        except OSError:
+            pass
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _is_retroarch(p: Path) -> bool:
+    """Czy to binarka RetroArcha (także AppImage)."""
+    stem = p.stem.lower()
+    return stem == "retroarch" or (not IS_WIN and stem.startswith("retroarch"))
+
+
+def _core_dirs(ra: Path) -> list:
+    """Katalogi z rdzeniami libretro — obok binarki i w miejscach systemowych.
+
+    Na Linuksie rdzenie prawie nigdy nie leżą obok RetroArcha: instaluje je
+    menedżer pakietów albo sam RetroArch, do katalogu w $HOME.
+    """
+    dirs = [ra.parent / "cores"]
+    if not IS_WIN:
+        home = Path.home()
+        dirs += [
+            home / ".config/retroarch/cores",
+            home / ".var/app/org.libretro.RetroArch/config/retroarch/cores",
+            Path("/usr/lib/libretro"),
+            Path("/usr/lib64/libretro"),
+            Path("/usr/local/lib/libretro"),
+        ]
+    return [d for d in dirs if d.is_dir()]
 
 # preferowane standalone emulatory per platforma (podłańcuch nazwy exe → args)
 ROM_EMU_PREF: dict = {
@@ -120,6 +181,16 @@ def _find_standalone(plat: str, emu_exes: list) -> tuple:
         for exe in emu_exes:
             if sub in Path(exe).stem.lower():
                 return exe, args
+    if not IS_WIN:
+        # Linux: emulator zwykle jest pakietem dystrybucji, więc gdy nie ma go
+        # we wskazanym katalogu — szukamy w PATH. Nazwy bywają z sufiksem
+        # interfejsu (pcsx2-qt, mgba-qt, dolphin-emu), stąd kilka wariantów.
+        import shutil
+        for sub, args in ROM_EMU_PREF.get(str(plat).upper(), []):
+            for nm in (sub, f"{sub}-qt", f"{sub}-emu", f"{sub}-gtk"):
+                hit = shutil.which(nm)
+                if hit:
+                    return hit, args
     return "", ""
 
 
@@ -129,11 +200,14 @@ def _find_retroarch_core(plat: str, base_emu: str) -> tuple:
     canon = _EMU_PLAT_ALIAS.get(plat_u) or spine_canon_key(plat_u)
     plat_set = {plat_u, canon.upper()}
     base = Path(base_emu)
-    for pat in ("retroarch.exe", "*/retroarch.exe", "*/*/retroarch.exe"):
-        for ra in base.glob(pat):
-            cores = ra.parent / "cores"
-            if not cores.is_dir():
-                continue
+    ras = [p for p in _emu_binaries(base) if _is_retroarch(p)]
+    if not IS_WIN:
+        import shutil
+        hit = shutil.which("retroarch")     # zwykle z pakietu dystrybucji
+        if hit:
+            ras.append(Path(hit))
+    for ra in ras:
+        for cores in _core_dirs(ra):
             for core_f in sorted(cores.iterdir()):
                 if core_f.suffix.lower() not in (".dll", ".so"):
                     continue
@@ -162,18 +236,10 @@ def _all_emu_exes(base_emu: str, limit: int = 3000) -> list:
     base = Path(base_emu)
     if not base.is_dir():
         return out
-    for pat in ("*.exe", "*/*.exe", "*/*/*.exe"):
-        try:
-            for p in base.glob(pat):
-                if any(part.lower() in _EMU_SKIP_DIRS for part in p.parts):
-                    continue
-                if not p.is_file():
-                    continue
-                out.append(str(p))
-        except Exception:
-            pass
-        if len(out) >= limit:
-            break
+    for p in _emu_binaries(base, limit):
+        if any(part.lower() in _EMU_SKIP_DIRS for part in p.parts):
+            continue
+        out.append(str(p))
     return out
 
 
@@ -207,32 +273,31 @@ _PLAT_EXE_HINTS: dict = {
 def scan_emulators_for(plat: str, base_emu: str) -> list:
     """Opcje emulatora dla platformy: rdzenie RetroArch + standalone (do WYBORU).
     Każda: {label, exe, args, type}."""
-    if not base_emu or not Path(base_emu).is_dir():
+    base = Path(base_emu) if base_emu else None
+    # Na Linuksie emulatory zwykle przychodzą z dystrybucji i leżą w PATH,
+    # a nie we wspólnym katalogu — brak base_emu nie może kończyć skanu.
+    if IS_WIN and (base is None or not base.is_dir()):
         return []
     plat_u = str(plat).upper()
     canon = _EMU_PLAT_ALIAS.get(plat_u) or spine_canon_key(plat_u)
     plat_set = {plat_u, canon.upper()}
-    base = Path(base_emu)
     ra_out, st_out = [], []
     seen = set()
-    exes = []
-    for pat in ("*.exe", "*/*.exe", "*/*/*.exe"):
-        try:
-            exes += list(base.glob(pat))
-        except Exception:
-            pass
-        if len(exes) >= 2000:
-            break
+    exes = _emu_binaries(base, 2000) if (base and base.is_dir()) else []
+    if not IS_WIN:
+        import shutil
+        hints = _PLAT_EXE_HINTS.get(plat_u) or _PLAT_EXE_HINTS.get(canon.upper(), [])
+        for nm in ["retroarch"] + list(hints):
+            hit = shutil.which(nm)
+            if hit:
+                exes.append(Path(hit))
     for exe in sorted(exes):
         s = str(exe)
         if s in seen:
             continue
         seen.add(s)
-        if exe.stem.lower() == "retroarch":
-            cores = exe.parent / "cores"
-            if not cores.is_dir():
-                continue
-            for cf in sorted(cores.iterdir()):
+        if _is_retroarch(exe):
+            for cf in sorted(p for d in _core_dirs(exe) for p in d.iterdir()):
                 if cf.suffix.lower() not in (".dll", ".so"):
                     continue
                 stem = cf.stem
