@@ -3,6 +3,28 @@
 Wszystkie istotne zmiany w PyLinksWeb. Format oparty na
 [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/).
 
+## [9.18.1] — 2026-09-14
+
+### Naprawione (z code review)
+- **MAME nie działał na Linuksie.** `_NO_WINDOW` był na sztywno `0x08000000`
+  (flaga wyłącznie Windows), więc `subprocess.run(..., creationflags=...)`
+  rzucał `ValueError` — łapane po cichu → wersja/weryfikacja/eksport MAME nigdy
+  nie ruszały. Teraz `getattr(subprocess, "CREATE_NO_WINDOW", 0)` (0 poza Windows).
+- **Filtr „dla dorosłych" nie działał (fail-open).** Wyrażenie miało LITERALNE
+  znaki backspace (0x08) zamiast granic słowa `\b`, więc nigdy nie trafiało —
+  tytuły dla dorosłych przechodziły mimo `skip_adult`. Poprawione na `\b…\b`.
+- **Duplikaty gier omijały odpowiedź API.** `scan_pc` deduplikował do
+  `_pc_games`, ale zwracał ORYGINALNE `res["games"]` i jego licznik — UI pokazywał
+  duble o wspólnym kluczu, a eksport ruszał tylko pierwszy rekord. Zwracamy teraz
+  zdedupowaną listę i jej rozmiar.
+- **Eksport do Steam mimo działającego Steama.** `is_steam_running()` sprawdzane
+  było DOPIERO w wyniku, PO zapisach (vdf/grafiki/kolekcje) — eksport zgłaszał
+  sukces, a Steam nadpisywał zmiany przy wyjściu. Egzekwujemy zamknięty Steam
+  PRZED jakimkolwiek zapisem.
+- **Otwieranie dziennika tylko na Windows.** `open_log_dir` wołało `explorer`
+  na obu ścieżkach → na Linuksie błąd. Teraz per platforma: Explorer / `open`
+  (macOS) / `xdg-open` (Linux).
+
 ## [9.18.0] — 2026-09-04
 
 ### Dodane — wsparcie dla Linuksa (paczka źródłowa, bez binarki)

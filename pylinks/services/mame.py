@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS mame_sets (
 CREATE INDEX IF NOT EXISTS idx_mame_parent ON mame_sets(parent);
 """
 
-_NO_WINDOW = 0x08000000          # CREATE_NO_WINDOW — bez mignięcia konsoli
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # 0 poza Windows
 
 
 def _db(cache_dir) -> sqlite3.Connection:
@@ -156,7 +156,7 @@ GENRE_SKIP_DEFAULT = (
 # MAME nie ma flagi „dla dorosłych" — jedyne, czym dysponujemy, to tytuł.
 # Lista celowo wąska: lepiej czegoś nie odfiltrować, niż ukryć zwykłą grę.
 _ADULT_RE = re.compile(
-    r"(strip|nude|nudes|nudity|erotic|hentai|porno?|xxx|sexy|topless)", re.I)
+    r"\b(strip|nude|nudes|nudity|erotic|hentai|porno?|xxx|sexy|topless)\b", re.I)
 
 # Sterowanie odsiewane DOMYŚLNIE: hazard, mahjong/hanafuda oraz spinner (`dial`).
 # `paddle` (kierownice) i `trackball` celowo ZOSTAJĄ — inaczej wypadłyby klasyki

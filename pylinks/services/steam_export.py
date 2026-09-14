@@ -590,6 +590,14 @@ def _collapse_twins(by_appid: dict) -> int:
 
 def export_to_steam(cfg: dict, games: list, cache_dir: Path, progress=None) -> dict:
     from pylinks.api import _game_key
+    # Steam MUSI być zamknięty — inaczej przy wyjściu nadpisze shortcuts.vdf,
+    # kolekcje i grafiki (nasze zapisy przepadną). Dawniej sprawdzaliśmy
+    # is_steam_running() DOPIERO w wyniku, PO wszystkich zapisach → eksport
+    # zgłaszał sukces, a Steam i tak klobował. Egzekwujemy PRZED zapisami.
+    if is_steam_running():
+        return {"ok": False, "steam_running": True,
+                "reason": "Steam jest uruchomiony — zamknij go przed eksportem "
+                          "(inaczej nadpisze zmiany przy wyjściu)."}
     configs = find_userdata_configs(cfg.get("steam_exe", ""),
                                     cfg.get("steam_userdata_dir", ""))
     if not configs:

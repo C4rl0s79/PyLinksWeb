@@ -547,12 +547,15 @@ class Api:
         res = scan_pc.scan_pc_library(cfg)
         self._pc_games = self._dedupe_by_key(res["games"])
         self._stem_index = None
+        # Zwracamy ZDEDUPOWANĄ listę (tę samą, na której działa backend/eksport)
+        # — inaczej UI renderował duplikaty kart o WSPÓLNYM kluczu (jedna
+        # tożsamość zaznaczenia), a operacje ruszały tylko pierwszy rekord.
         return {
             "ok": True,
             "counts": res["counts"],
-            "total": len(res["games"]),
+            "total": len(self._pc_games),
             "steam_exe": res.get("steam_exe", ""),
-            "games": [_slim_game(g) for g in res["games"]],
+            "games": [_slim_game(g) for g in self._pc_games],
         }
 
 
@@ -2085,15 +2088,21 @@ class Api:
             return {"ok": False, "reason": str(e)}
 
     def open_log_dir(self) -> dict:
-        """Pokazuje dziennik w Eksploratorze — szybciej niż dyktowanie ścieżki."""
+        """Pokazuje dziennik w menedżerze plików (Explorer / xdg-open / open)."""
         import subprocess
+        import sys
         from pylinks.core import log as _log
         pth = Path(_log.path())
         try:
-            if pth.is_file():
-                subprocess.Popen(["explorer", "/select,", str(pth)])
-            else:
-                subprocess.Popen(["explorer", str(pth.parent)])
+            if os.name == "nt":
+                if pth.is_file():
+                    subprocess.Popen(["explorer", "/select,", str(pth)])
+                else:
+                    subprocess.Popen(["explorer", str(pth.parent)])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(pth.parent)])
+            else:                               # Linux itd. — xdg-open na katalogu
+                subprocess.Popen(["xdg-open", str(pth.parent)])
             return {"ok": True, "path": str(pth)}
         except Exception as e:
             return {"ok": False, "reason": str(e)}
