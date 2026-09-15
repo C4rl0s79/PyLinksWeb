@@ -1738,8 +1738,33 @@ function romRow(s){
 function romRowInputs(tr){ return tr.querySelectorAll("input[type=text]"); }
 function romRowEmu(tr, exe, args){
   const inp = romRowInputs(tr);
+  const staryExe = inp[2].value.trim(), stareArgs = inp[4].value.trim();
   inp[2].value = exe;                 // emulator (kol. 3)
-  if (args != null) inp[4].value = args;   // args (kol. 5)
+  if (args == null) return;           // 📁 wskazany ręcznie — argumentów nie ruszamy
+  // Zasada: nigdy nie kasujemy po cichu poprawnych argumentów. Dawniej każda
+  // zmiana emulatora wpisywała tu to, co przyszło z okienka — a dla programów
+  // samodzielnych był to pusty tekst.
+  const nowe = String(args).trim();
+  const flagaL = /-L\s+("[^"]*"|\S+)/;
+  const bylRA = flagaL.test(stareArgs), jestRA = flagaL.test(nowe);
+  const tenSam = staryExe.split("\\").join("/").toLowerCase()
+               === String(exe).split("\\").join("/").toLowerCase();
+  if (jestRA){
+    // Zmiana rdzenia: podmieniamy WYŁĄCZNIE „-L …", dodatkowe flagi zostają.
+    if (bylRA){
+      const noweL = nowe.match(flagaL)[0];
+      let wynik = stareArgs.replace(flagaL, () => noweL);
+      if (!/%ROM%/.test(wynik)) wynik += " %ROM%";
+      inp[4].value = wynik;
+    } else {
+      inp[4].value = nowe;
+    }
+    return;
+  }
+  if (tenSam && stareArgs && !bylRA) return;   // ten sam program — zostają Twoje
+  if (nowe){ inp[4].value = nowe; return; }    // znane domyślne dla nowego programu
+  if (bylRA) inp[4].value = "";                // „-L rdzeń" nie ma sensu poza RetroArchem
+  // w pozostałych przypadkach zostawiamy — lepiej poprawić ręcznie niż stracić
 }
 
 // popup wyboru emulatora/rdzenia dla wiersza
@@ -1754,7 +1779,12 @@ async function emuPickOpen(btn, tr){
   pop.hidden = false;
   let opts = [];
   try{ opts = await api("scan_emulators", sys, base); }catch(e){}
-  if (!opts.length){ pop.innerHTML = `<div class="muted" style="padding:6px 10px">Brak w folderze emulatorów.</div>`; return; }
+  if (!opts.length){
+    pop.innerHTML = `<div class="muted" style="padding:6px 10px;max-width:240px">`
+      + `Brak rdzenia RetroArch ani emulatora dla tej platformy. `
+      + `Doinstaluj rdzeń albo wskaż program przyciskiem 📁.</div>`;
+    return;
+  }
   pop.innerHTML = "";
   for (const o of opts){
     const b = document.createElement("button");
@@ -2186,6 +2216,42 @@ function collectSkipGenres(){
 // Sprzątanie duplikatów w bibliotece Steam. ZAWSZE najpierw podgląd: pokazujemy
 // dokładnie, co zniknie, i dopiero po potwierdzeniu ruszamy plik. Metoda robi
 // kopię zapasową `shortcuts.vdf` i podmienia go atomowo.
+// Rozpoznawanie serii (IGDB) — wynik czyta PyLinksDeck, sam PyLinksWeb go nie używa.
+el("s_series").onclick = async () => {
+  const out = el("s_seriesres");
+  let r;
+  try{ r = await api("series_detect", el("s_seriesForce").checked); }
+  catch(e){ out.textContent = "✗ " + e.message; return; }
+  if (!r || !r.started){ out.textContent = "✗ " + ((r && r.reason) || "nie uruchomiono"); return; }
+  out.textContent = `sprawdzam ${r.total} gier…`;
+  el("pfBar").hidden = false; el("pfFill").style.width = "0%";
+  PF_LABEL = "Serie gier";
+  if (PF_TIMER) clearInterval(PF_TIMER);
+  PF_TIMER = setInterval(async () => {
+    let s;
+    try{ s = await api("job_status"); }catch(_){ return; }
+    const pct = s.total ? Math.round(100 * s.done / s.total) : 0;
+    el("pfFill").style.width = pct + "%";
+    el("pfTxt").textContent = `${PF_LABEL}: ${s.done}/${s.total}` + (s.current ? ` — ${s.current}` : "");
+    // Pasek postępu leży POD oknem Ustawień (okno zakrywa cały ekran), więc postęp
+    // pokazujemy też tutaj — inaczej przez kilka minut wyglądało, że nic się nie dzieje.
+    if (s.running){
+      out.textContent = `⏳ ${s.done}/${s.total} (${pct}%)` + (s.current ? ` — ${s.current}` : "");
+      return;
+    }
+    clearInterval(PF_TIMER); PF_TIMER = null;
+    el("pfBar").hidden = true;
+    const w = s.result || {};
+    if (w.error){ out.textContent = "✗ " + w.error; return; }
+    let sum = {};
+    try{ sum = await api("series_summary"); }catch(_){}
+    const top = (sum.series || []).slice(0, 5).map(x => `${x.name} (${x.games})`).join(", ");
+    out.textContent = `✓ sprawdzono ${w.checked}, w seriach ${w.in_series}, bez trafienia ${w.no_match}`
+      + (w.skipped_known ? `, pominięto znane ${w.skipped_known}` : "")
+      + (top ? ` • ${top}` : "");
+  }, 700);
+};
+
 el("s_steamclean").onclick = async () => {
   const out = el("s_cleanres"), box = el("s_cleanbox");
   out.textContent = "Sprawdzam…"; box.hidden = true;

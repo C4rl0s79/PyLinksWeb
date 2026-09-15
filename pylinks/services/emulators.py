@@ -75,31 +75,60 @@ def _core_dirs(ra: Path) -> list:
         ]
     return [d for d in dirs if d.is_dir()]
 
+# Argumenty emulatorów samodzielnych — JEDNO źródło na program (dawniej ares
+# powtarzał się pod sześcioma platformami). Wpisane WYŁĄCZNIE parametry sprawdzone
+# w tekście pomocy zapisanym w samych plikach wykonywalnych — błędna flaga potrafi
+# sprawić, że emulator nie wystartuje wcale. %ROM% tam, gdzie gra musi iść przez
+# konkretny parametr; bez %ROM% ścieżka jest dokładana na końcu.
+EMU_ARGS: dict = {
+    "duckstation": "-fullscreen -nogui",
+    "pcsx2": "-fullscreen -nogui",
+    "rpcs3": "--no-gui",
+    "dolphin": "-b -e",                 # -e <plik>: „Load the specified file"
+    "cemu": "-g",
+    "ares": "--fullscreen",
+    "mgba": "-f",                       # „-f, --fullscreen  Start full-screen"
+    "ppsspp": "--fullscreen",
+    "azahar": "-f",                     # „-f, --fullscreen  Start in fullscreen mode"
+    "snes9x": "-fullscreen",
+    "ryujinx": "--fullscreen",
+    # xemu (fork QEMU) ładuje płytę WYŁĄCZNIE przez -dvd_path; goła ścieżka nic nie da
+    "xemu": "-full-screen -dvd_path %ROM%",
+    # shadPS4: --fullscreen wymaga wartości („use true|false"), gra przez -g
+    "shadps4": "--fullscreen true -g %ROM%",
+}
+
+
+def _emu_args(sub: str) -> str:
+    return EMU_ARGS.get(sub, "")
+
+
 # preferowane standalone emulatory per platforma (podłańcuch nazwy exe → args)
 ROM_EMU_PREF: dict = {
-    "PS1": [("duckstation", "-fullscreen -nogui"), ("epsxe", ""), ("mednafen", "")],
-    "PS2": [("pcsx2", "-fullscreen -nogui")],
-    "PS3": [("rpcs3", "--no-gui")],
-    "PSP": [("ppsspp", "")],
-    "PS4": [("shadps4", "")],
-    "PSVITA": [("vita3k", "")],
-    "GCN": [("dolphin", "-b -e")],
-    "WII": [("dolphin", "-b -e")],
-    "WIIU": [("cemu", "-g")],
-    "NSW": [("ryujinx", ""), ("eden", ""), ("citron", ""), ("yuzu", "")],
-    "3DS": [("azahar", ""), ("citra", "")],
-    "NDS": [("melonds", ""), ("desmume", "")],
-    "N64": [("ares", ""), ("project64", "")],
-    "SNES": [("snes9x", ""), ("ares", "")],
-    "SNESMSU1": [("snes9x", ""), ("ares", "")],
-    "NES": [("ares", ""), ("fceux", ""), ("nestopia", "")],
-    "GBA": [("mgba", "")], "GB": [("mgba", "")], "GBC": [("mgba", "")],
-    "MD": [("ares", "")],
-    "DC": [("flycast", ""), ("redream", "")],
-    "SATURN": [("mednafen", ""), ("ares", "")],
-    "X360": [("xenia", "")],
-    "MAME": [("mame", "")],
+    "PS1": ["duckstation", "epsxe", "mednafen"],
+    "PS2": ["pcsx2"],
+    "PS3": ["rpcs3"],
+    "PSP": ["ppsspp"],
+    "PS4": ["shadps4"],
+    "PSVITA": ["vita3k"],
+    "GCN": ["dolphin"], "WII": ["dolphin"],
+    "WIIU": ["cemu"],
+    "NSW": ["ryujinx", "eden", "citron", "yuzu"],
+    "3DS": ["azahar", "citra"],
+    "NDS": ["melonds", "desmume"],
+    "N64": ["ares", "project64"],
+    "SNES": ["snes9x", "ares"], "SNESMSU1": ["snes9x", "ares"],
+    "NES": ["ares", "fceux", "nestopia"],
+    "GBA": ["mgba"], "GB": ["mgba"], "GBC": ["mgba"],
+    "MD": ["ares"],
+    "DC": ["flycast", "redream"],
+    "SATURN": ["mednafen", "ares"],
+    "XBOX": ["xemu"],
+    "X360": ["xenia"],
+    "MAME": ["mame"],
 }
+# zgodność ze starym kształtem: lista par (podłańcuch, argumenty)
+ROM_EMU_PREF = {k: [(sub, _emu_args(sub)) for sub in v] for k, v in ROM_EMU_PREF.items()}
 
 _EMU_PLAT_ALIAS = {"NAOMI": "DC", "NAOMI2": "DC", "ATOMISWAVE": "DC",
                    "HIKARU": "DC", "TRIFORCE": "GCN"}
@@ -128,6 +157,7 @@ RETROARCH_CORE_SYSTEMS: dict = {
     "fbneo": ["MAME", "NEOGEO"], "fbalpha2012": ["MAME", "NEOGEO"],
     "fbalpha2012_neogeo": "NEOGEO",
     "stella": "ATARI2600", "stella2014": "ATARI2600", "opera": "3DO",
+    "bluemsx": ["MSX", "MSX2"], "fmsx": ["MSX", "MSX2"],
     "mednafen_ngp": "NGP", "race": "NGP",
 }
 
@@ -243,6 +273,100 @@ def _all_emu_exes(base_emu: str, limit: int = 3000) -> list:
     return out
 
 
+# Kod platformy → OFICJALNE nazwy baz libretro, dokładnie jak w polu `database`
+# plików `info/*.info` RetroArcha (sprawdzone na 308 plikach). Dzięki temu rdzeń,
+# którego nie ma w RETROARCH_CORE_SYSTEMS, i tak zostanie rozpoznany — sam
+# deklaruje, jakie systemy obsługuje. Porównanie jest DOKŁADNE po normalizacji:
+# „zawiera" byłoby błędem, bo „Game Boy" pasuje też do Advance i Color,
+# a „PlayStation" do PS2 i PSP.
+PLATFORM_LIBRETRO_DB: dict = {
+    "3DO": ["The 3DO Company - 3DO"], "AMIGA": ["Commodore - Amiga"],
+    "ATARI2600": ["Atari - 2600"], "JAGUAR": ["Atari - Jaguar"],
+    "DC": ["Sega - Dreamcast"], "NAOMI": ["Sega - Naomi"], "NAOMI2": ["Sega - Naomi 2"],
+    "GB": ["Nintendo - Game Boy"], "GBC": ["Nintendo - Game Boy Color"],
+    "GBA": ["Nintendo - Game Boy Advance"],
+    "GCN": ["Nintendo - GameCube"], "WII": ["Nintendo - Wii"],
+    "N64": ["Nintendo - Nintendo 64"], "NDS": ["Nintendo - Nintendo DS"],
+    "NES": ["Nintendo - Nintendo Entertainment System"],
+    "SNES": ["Nintendo - Super Nintendo Entertainment System"],
+    "SNESMSU1": ["Nintendo - Super Nintendo Entertainment System"],
+    "GG": ["Sega - Game Gear"], "SMS": ["Sega - Master System - Mark III"],
+    "MD": ["Sega - Mega Drive - Genesis"], "SEGACD": ["Sega - Mega-CD - Sega CD"],
+    "SATURN": ["Sega - Saturn"],
+    "MSX": ["Microsoft - MSX", "Microsoft - MSX2"],
+    "MSX2": ["Microsoft - MSX2", "Microsoft - MSX"],
+    "NEOGEO": ["SNK - Neo Geo", "SNK - Neo Geo CD"],
+    "PCENGINE": ["NEC - PC Engine - TurboGrafx 16", "NEC - PC Engine CD - TurboGrafx-CD"],
+    "PC98": ["NEC - PC-98"],
+    "PS1": ["Sony - PlayStation"], "PS2": ["Sony - PlayStation 2"],
+    "PSP": ["Sony - PlayStation Portable"],
+    "MAME": ["MAME", "FBNeo - Arcade Games", "HBMAME"],
+}
+
+
+def _norm_db(x: str) -> str:
+    import re as _re
+    return _re.sub(r"[^a-z0-9]+", "", (x or "").lower())
+
+
+_INFO_CACHE: dict = {}
+
+
+def _core_info(ra: Path) -> dict:
+    """{rdzeń: {"db": {znormalizowane bazy}, "raw": „systemname|display_name"}}
+    z plików `info/*.info`. Czytane raz na katalog RetroArcha."""
+    key = str(ra.parent)
+    if key in _INFO_CACHE:
+        return _INFO_CACHE[key]
+    import re as _re
+    out: dict = {}
+    for d in (ra.parent / "info",):
+        if not d.is_dir():
+            continue
+        for f in d.glob("*_libretro.info"):
+            try:
+                t = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            def pole(n):
+                m = _re.search(rf'^{n}\s*=\s*"([^"]*)"', t, _re.M)
+                return m.group(1) if m else ""
+            stem = f.stem[:-len("_libretro")]
+            out[stem] = {"db": {_norm_db(x) for x in pole("database").split("|") if x},
+                         "raw": _norm_db(pole("systemname") + " " + pole("display_name"))}
+    _INFO_CACHE[key] = out
+    return out
+
+
+def _core_supports(stem: str, plat_set: set, info: dict) -> bool:
+    """Czy rdzeń obsługuje platformę — w trzech krokach, od najpewniejszego."""
+    # 1) ręczna, sprawdzona tabela
+    systems = RETROARCH_CORE_SYSTEMS.get(stem)
+    if systems:
+        if isinstance(systems, str):
+            systems = [systems]
+        if plat_set & {x.upper() for x in systems}:
+            return True
+    inf = info.get(stem)
+    if not inf:
+        return False
+    # 2) rdzeń SAM deklaruje bazy — dokładne porównanie z nazwami oficjalnymi
+    for plat in plat_set:
+        chcemy = {_norm_db(x) for x in PLATFORM_LIBRETRO_DB.get(plat, ())}
+        if chcemy and (chcemy & inf["db"]):
+            return True
+    # 3) platforma spoza tabeli (dodana później przez użytkownika): jej kod
+    #    jako fragment nazwy systemu. Tylko dla kodów, których nie znamy,
+    #    i nie krótszych niż 3 znaki — inaczej „GB" złapałby przypadkowe nazwy.
+    for plat in plat_set:
+        if plat in PLATFORM_LIBRETRO_DB or len(plat) < 3:
+            continue
+        kod = _norm_db(plat)
+        if any(kod in db for db in inf["db"]) or kod in inf["raw"]:
+            return True
+    return False
+
+
 RETROARCH_CORE_DISPLAY: dict = {
     "mednafen_psx": "Beetle PSX", "mednafen_psx_hw": "Beetle PSX HW",
     "pcsx_rearmed": "PCSX-ReARMed", "swanstation": "SwanStation", "duckstation": "DuckStation",
@@ -255,6 +379,7 @@ RETROARCH_CORE_DISPLAY: dict = {
     "genesis_plus_gx": "Genesis Plus GX", "picodrive": "PicoDrive", "blastem": "BlastEm",
     "mednafen_pce": "Beetle PCE", "mame2003_plus": "MAME 2003-Plus", "fbneo": "FinalBurn Neo",
     "stella": "Stella", "opera": "Opera (3DO)",
+    "bluemsx": "blueMSX", "fmsx": "fMSX",
 }
 
 _PLAT_EXE_HINTS: dict = {
@@ -267,6 +392,8 @@ _PLAT_EXE_HINTS: dict = {
     "DC": ["redream", "flycast", "demul"], "MAME": ["mame"],
     "PS4": ["shadps4"], "NSW": ["ryujinx", "eden", "citron", "yuzu"],
     "3DS": ["azahar", "citra"], "WIIU": ["cemu"], "X360": ["xenia"],
+    "MSX": ["openmsx", "bluemsx", "ares"], "MSX2": ["openmsx", "bluemsx", "ares"],
+    "XBOX": ["xemu"], "PSVITA": ["vita3k"],
 }
 
 
@@ -297,28 +424,51 @@ def scan_emulators_for(plat: str, base_emu: str) -> list:
             continue
         seen.add(s)
         if _is_retroarch(exe):
-            for cf in sorted(p for d in _core_dirs(exe) for p in d.iterdir()):
+            info = _core_info(exe)
+            wszystkie = []
+            for cf in sorted(p for d in _core_dirs(exe) if d.is_dir()
+                             for p in d.iterdir()):
                 if cf.suffix.lower() not in (".dll", ".so"):
                     continue
                 stem = cf.stem
                 if stem.endswith("_libretro"):
                     stem = stem[:-len("_libretro")]
-                systems = RETROARCH_CORE_SYSTEMS.get(stem)
-                if not systems:
-                    continue
-                if isinstance(systems, str):
-                    systems = [systems]
-                if not (plat_set & {x.upper() for x in systems}):
-                    continue
-                ra_out.append({
-                    "label": f"RetroArch — {RETROARCH_CORE_DISPLAY.get(stem, stem)}",
-                    "exe": s, "args": f'-L "{cf}" %ROM%', "type": "retroarch"})
+                wpis = {"label": f"RetroArch — {RETROARCH_CORE_DISPLAY.get(stem, stem)}",
+                        "exe": s, "args": f'-L "{cf}" %ROM%', "type": "retroarch"}
+                wszystkie.append(wpis)
+                if _core_supports(stem, plat_set, info):
+                    ra_out.append(wpis)
+            # Ostatnia deska: nie rozpoznaliśmy ŻADNEGO rdzenia dla platformy.
+            # Każdy rdzeń RetroArcha to prawdziwy emulator (nie „chdman" czy
+            # „uninstaller"), więc zamiast pustej listy dajemy wszystkie
+            # zainstalowane — wybór zostaje w rękach użytkownika.
+            # Rozróżniamy dwa przypadki. Platforma ZNANA (jest w tabeli baz) bez
+            # dopasowanego rdzenia = po prostu go nie zainstalowano — lista cudzych
+            # rdzeni byłaby tylko szumem, bo gra 3DO nie ruszy w Nestopii.
+            # Platforma NIEZNANA = mogliśmy nie trafić w nazwę, więc dajemy wybór.
+            znana = any(p in PLATFORM_LIBRETRO_DB for p in plat_set)
+            if not ra_out and wszystkie and not znana:
+                for w in wszystkie:
+                    ra_out.append(dict(w, label=w["label"] + "  (nie rozpoznano platformy)"))
         else:
             hints = _PLAT_EXE_HINTS.get(plat_u) or _PLAT_EXE_HINTS.get(canon.upper(), [])
-            if hints and not any(h in exe.stem.lower() for h in hints):
+            # Bez podpowiedzi dla platformy nie wiemy, który program ją obsługuje.
+            # Dawniej warunek `hints and …` przepuszczał wtedy WSZYSTKO — okienko
+            # wyboru dla MSX pokazywało 46 przypadkowych exe (chdman, uninstaller,
+            # updater…). Lepiej nic, a własny program wskazać przyciskiem 📁.
+            if not hints or not any(h in exe.stem.lower() for h in hints):
                 continue
+            # „-room" to serwery pokoi do gry sieciowej (azahar-room, citron-room),
+            # nie emulatory — pasowały tylko podłańcuchem nazwy
+            if exe.stem.lower().endswith("-room"):
+                continue
+            # Znane argumenty tego programu (ROM_EMU_PREF). Dawniej szedł zawsze
+            # pusty tekst, który w okienku wyboru NADPISYWAŁ poprawne argumenty
+            # — np. „-fullscreen -nogui" znikało po ponownym wybraniu DuckStation.
+            pref = ROM_EMU_PREF.get(plat_u) or ROM_EMU_PREF.get(canon.upper(), [])
+            args = next((a for sub, a in pref if sub in exe.stem.lower()), "")
             st_out.append({"label": f"{exe.stem} (standalone)", "exe": s,
-                           "args": "", "type": "standalone"})
+                           "args": args, "type": "standalone"})
     return ra_out + st_out
 
 

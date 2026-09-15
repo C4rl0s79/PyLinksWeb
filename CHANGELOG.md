@@ -3,6 +3,180 @@
 Wszystkie istotne zmiany w PyLinksWeb. Format oparty na
 [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/).
 
+## [9.21.3] — 2026-09-15
+
+### Naprawione
+- **Gry SNES MSU-1 (i inne z nazwami No-Intro) dostawały złe daty w seriach.**
+  Rozpoznawanie brało pierwszy wpis IGDB z podobieństwem ≥ 0,5, więc wygrywały
+  fanowskie hacki („Chrono Trigger+" z 2022 zamiast oryginału z 1995), późne
+  porty i zupełnie inne gry („Sim City" → „Russian City Sim"). Teraz:
+  - próg podobieństwa dla serii 0,80 — lepiej brak serii niż zła seria,
+  - mody i forki IGDB są pomijane,
+  - przy remisie wygrywa gra główna, potem najwcześniejsze wydanie,
+  - porównanie obejmuje nazwy alternatywne („Seiken Densetsu 3" → Trials of Mana,
+    „Mother 2" → EarthBound),
+  - nazwy No-Intro są szukane też w zwykłym zapisie („Legend of Zelda, The - A Link
+    to the Past" → „The Legend of Zelda: A Link to the Past", „ - " → „: ",
+    „Battletoads-Double Dragon" → ze spacją, sam tytuł przed podtytułem).
+
+  Po aktualizacji uruchom **Rozpoznaj serie gier** z opcją „sprawdź ponownie
+  wszystkie", żeby poprawić już zapisane dopasowania.
+
+## [9.21.2] — 2026-09-15
+
+### Naprawione
+- **Gry z MAME nie trafiały do rozpoznawania serii**, więc w PyLinksDecku lądowały
+  za blokiem serii — w kolekcji Tekken automaty stały na końcu, choć wyszły przed
+  portami na PS1. Rozpoznawanie obejmuje teraz gry MAME, ale WYŁĄCZNIE te ze
+  skrótem w `LINKS\MAME` (tylko je pokazuje Deck; przeglądanie tysięcy tytułów
+  biblioteki arcade nie ma sensu). Klucz `mame::<zestaw>` jest liczony dokładnie
+  jak w Decku, więc trafia bez przybliżeń.
+
+  IGDB ma osobne wpisy arcade z wcześniejszymi datami (Tekken 1994-12, Tekken 2
+  1995-06, Tekken 3 1997-03), a dopasowanie z platformą Arcade wybiera je poprawnie.
+
+- Nazwy automatów z dopiskiem rewizji („Tekken 2 Ver.B", „… (Rev A)", „… - Ver 2.1")
+  są przy braku trafienia szukane ponownie bez dopisku.
+
+## [9.21.1] — 2026-09-15
+
+### Naprawione
+- **„Rozpoznaj serie gier" wyglądało na zawieszone.** Trzy przyczyny naraz:
+  * pasek postępu leżał POD oknem Ustawień (okno zakrywa cały ekran), więc przez
+    kilka minut widać było tylko „sprawdzam 563 gier…" — postęp jest teraz
+    pokazywany także w samym oknie: `⏳ 120/563 (21%) — Tales of Berseria`;
+  * wyniki zapisywały się dopiero na SAMYM KOŃCU — w bazie nie było nawet tabeli,
+    a zamknięcie programu w trakcie traciło całą pracę. Teraz praca idzie porcjami
+    po 40 gier i każda porcja jest zapisywana od razu (sprawdzone: w trakcie
+    przebiegu w bazie było już 40 wierszy);
+  * zapytania szły szeregowo ze stałą przerwą — ok. 0,8 s na grę, 6–8 minut dla
+    563 gier. Teraz cztery wątki ze wspólnym ogranicznikiem w limicie IGDB
+    (4 zapytania/s): **0,31 s na grę, ok. 3 minuty dla 563**.
+
+## [9.21.0] — 2026-09-15
+
+### Dodane
+- **Rozpoznawanie serii gier w IGDB** (Ustawienia → „🔗 Rozpoznaj serie gier").
+  Wynik trafia do tabeli `game_series` w `Cache/pylinks.db` i służy PyLinksDeckowi
+  do układania gier jednej serii obok siebie. Sam PyLinksWeb go nie wyświetla.
+
+  Z nazwy przynależności do serii nie da się wyczytać: „Yakuza 0" i „Like a Dragon:
+  Infinite Wealth" to jedna seria mimo zmiany nazwy, a „Castlevania Judgment" nie ma
+  nic wspólnego z „Judgment". IGDB trzyma to jawnie — franczyza grupuje, a do
+  układania służy data wydania.
+
+  **Remake, remaster, edycja rozszerzona i port dostają datę ORYGINAŁU.** IGDB nie
+  opisuje ich przez `version_parent` (to pole jest dla edycji GOTY), tylko listami
+  `remakes`/`remasters`/`expanded_games`/`ports` po stronie oryginału — trzeba je
+  odszukać odwrotnie. Bez tego Kiwami stałoby w 2016, Vesperia DE w 2019, a port
+  PC Symphonii w 2013.
+
+  Sprawdzone na grach użytkownika: **21 z 21** rozpoznanych (także z podkreślnikiem
+  zamiast dwukropka i przestawionym przedimkiem No-Intro). Tales of układa się
+  w kanoniczną kolejność serii głównej, a trylogia Legend of Heroes na PSP —
+  poprawniej niż sugeruje amerykańska numeracja w nazwach.
+
+  Identyfikatory platform IGDB pobrane z API (37), nie wpisane z pamięci.
+  Gry już sprawdzone są pomijane; „sprawdź ponownie wszystkie" wymusza odświeżenie.
+
+## [9.20.0] — 2026-09-14
+
+### Dodane
+- **Argumenty dla kolejnych emulatorów samodzielnych.** Dotąd program znał je
+  tylko dla pięciu (DuckStation, PCSX2, RPCS3, Dolphin, Cemu). Doszły wyłącznie
+  parametry SPRAWDZONE w tekście pomocy zapisanym w samych plikach wykonywalnych
+  zainstalowanych emulatorów — bez uruchamiania ich i bez wpisywania z pamięci,
+  bo błędna flaga potrafi sprawić, że emulator nie wystartuje wcale:
+
+  | emulator | argumenty | źródło w pliku |
+  |---|---|---|
+  | ares | `--fullscreen` | lista opcji |
+  | mGBA | `-f` | „-f, --fullscreen  Start full-screen" |
+  | PPSSPP | `--fullscreen` | lista opcji |
+  | Azahar | `-f` | „-f, --fullscreen  Start in fullscreen mode" |
+  | Snes9x | `-fullscreen` | lista opcji |
+  | Ryujinx | `--fullscreen` | lista opcji |
+  | xemu | `-full-screen -dvd_path %ROM%` | „-full-screen  start in full screen" |
+  | shadPS4 | `--fullscreen true -g %ROM%` | „--fullscreen (use true|false)" |
+
+  Dwa przypadki wymagały czegoś więcej niż flagi pełnego ekranu: **xemu** ładuje
+  płytę wyłącznie przez `-dvd_path` (goła ścieżka nic nie daje), a **shadPS4**
+  wymaga wartości przy `--fullscreen` i gry przez `-g`.
+
+### Zmienione
+- **Argumenty definiowane raz na emulator** (`EMU_ARGS`), a nie osobno pod każdą
+  platformą — ares obsługuje sześć platform i miał sześć kopii. To ta sama klasa
+  błędu, która wracała przy grzbietach i kluczach grafik.
+- Serwery pokoi sieciowych (`azahar-room`, `citron-room`) nie pojawiają się już
+  jako emulatory — pasowały tylko fragmentem nazwy.
+
+### Uwagi
+- **Vita3K** uruchamia gry po identyfikatorze tytułu (`-r <TitleID>`), nie po
+  pliku — skrót ze ścieżką nie może zadziałać, więc argumentów nie wpisano.
+- **Eden / Citron**: `-f -g` potwierdzone tylko w wariantach konsolowych
+  (`eden-cli.exe`, `citron-cmd.exe`), nie w GUI — dla GUI zostaje sama ścieżka.
+- **flycast, melonDS, xenia**: w plikach nie znaleziono opcji wiersza poleceń;
+  zostaje sama ścieżka gry, która u nich wystarcza do uruchomienia.
+
+## [9.19.1] — 2026-09-14
+
+### Naprawione
+- **Argumenty znikały przy zmianie emulatora.** Dwie przyczyny naraz:
+  * program ZNAŁ poprawne argumenty programów samodzielnych (`ROM_EMU_PREF`:
+    DuckStation i PCSX2 `-fullscreen -nogui`, Dolphin `-b -e`, RPCS3 `--no-gui`),
+    ale okienko wyboru wysyłało dla nich zawsze PUSTY tekst;
+  * ten pusty tekst bezwarunkowo nadpisywał pole argumentów.
+
+  Stąd dokładnie zgłoszone objawy: standalone → standalone i RetroArch → standalone
+  kasowały argumenty, a standalone → RetroArch działało (tam szedł `-L …`).
+
+  Okienko dostaje teraz znane argumenty, a ich podmiana idzie wg zasady „nigdy
+  nie kasuj po cichu poprawnych":
+  * ten sam program wybrany ponownie → Twoje argumenty zostają,
+  * inny program ze znanymi argumentami → wpisywane są jego domyślne,
+  * inny program bez znanych argumentów → zostają dotychczasowe,
+  * RetroArch → program samodzielny bez domyślnych → czyszczone (`-L rdzeń`
+    nie ma sensu poza RetroArchem; ścieżka ROM-u i tak jest dokładana),
+  * zmiana rdzenia RetroArcha → podmieniany WYŁĄCZNIE `-L …`, własne flagi
+    (np. `-f`) zostają.
+
+  Sprawdzone na sześciu przejściach w przeglądarce; test dla przyczyny po stronie
+  backendu w `tests/test_emulator_cores.py`.
+
+## [9.19.0] — 2026-09-14
+
+### Zmienione
+- **Rdzenie RetroArch rozpoznawane z ich własnych plików opisu, nie z ręcznej
+  listy.** Poprawka z 9.18.1 tylko dopisywała MSX do tabeli — kolejny system bez
+  wpisu powtórzyłby problem. RetroArch dostarcza `info/*.info` (308 plików), a każdy
+  deklaruje w polu `database` oficjalne nazwy obsługiwanych systemów. Dopasowanie
+  idzie teraz w trzech warstwach, od najpewniejszej:
+  1. ręczna, sprawdzona tabela (jak dotąd),
+  2. baza zadeklarowana przez sam rdzeń — **dokładne** porównanie z oficjalną
+     nazwą (np. `Sega - Mega-CD - Sega CD`),
+  3. dla systemów spoza tabeli — kod platformy jako fragment nazwy systemu.
+
+  Porównanie jest dokładne celowo: „zawiera" byłoby błędem, bo „Game Boy" pasuje
+  też do Advance i Color, a „PlayStation" do PS2 i PSP. Nazwy w tabeli wzięte
+  wprost z plików opisu, nie z pamięci.
+
+  Efekt na instalacji użytkownika: PC Engine sam znalazł `mednafen_supergrafx`,
+  którego nie było w żadnej liście; nowy system COLECO — blueMSX.
+
+- **Platforma znana, ale bez rdzenia** (np. 3DO bez `opera`) dostaje pustą listę
+  z podpowiedzią, zamiast cudzych rdzeni. **Platforma nieznana** dostaje wszystkie
+  zainstalowane rdzenie z dopiskiem „nie rozpoznano platformy" — każdy rdzeń to
+  prawdziwy emulator, więc wybór zostaje w rękach użytkownika.
+
+### Dodane
+- `tests/test_emulator_cores.py` — 66 testów na sztucznym katalogu RetroArcha.
+  Pilnują: rozpoznania rdzenia spoza tabeli, braku przypadkowych exe dla KAŻDEGO
+  presetu, dokładności dopasowania, oraz — co najważniejsze na przyszłość — że
+  **każdy preset ma nazwę bazy libretro**. Dodanie platformy bez niej kończy się
+  czytelnym błędem testu, a nie pustym okienkiem u użytkownika.
+  Sprawdzone, że testy faktycznie gryzą: przywrócenie starego warunku daje
+  11 błędów, usunięcie wpisu SATURN — błąd z instrukcją, co dopisać.
+
 ## [9.18.1] — 2026-09-14
 
 ### Naprawione (z code review)
@@ -66,6 +240,23 @@ Wszystkie istotne zmiany w PyLinksWeb. Format oparty na
   `config.json` zapisywany z prawami `0600`, a okno Ustawień mówi wprost
   „plik 0600 (bez szyfrowania)” zamiast obiecywać szyfrowanie. Ścieżka
   windowsowa (TPM → DPAPI) bez zmian.
+
+## [9.18.1] — 2026-09-14
+
+### Naprawione
+- **Wybór emulatora dla MSX/MSX2 nie pokazywał rdzeni RetroArch.** Mapa rdzeni
+  nie znała `bluemsx` ani `fmsx`, choć oba były zainstalowane. Doszły razem
+  z podpowiedziami dla programów samodzielnych (openMSX, blueMSX, ares).
+
+- **Dla platform bez podpowiedzi okienko wysypywało KAŻDY plik exe.** Warunek
+  `hints and …` przy pustej liście przepuszczał wszystko, więc przy MSX lista
+  miała 46 pozycji — chdman, uninstaller, updater, narzędzia MAME. Teraz platforma
+  bez podpowiedzi nie dostaje przypadkowych programów; własny wskazuje się
+  przyciskiem 📁 obok.
+
+  Sprawdzone: samo kliknięcie w rdzeń poprawnie wypełnia emulator i argumenty
+  (`-L "…mednafen_saturn_libretro.dll" %ROM%`) i trafia do zapisu — wadliwe było
+  wyłącznie mapowanie.
 
 ## [9.18.0] — 2026-09-05
 

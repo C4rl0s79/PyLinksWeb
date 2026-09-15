@@ -270,6 +270,10 @@
           <label>TGDB API Key <input id="s_tgdbkey" type="password" autocomplete="off" spellcheck="false"></label>
           <div class="inln"><button class="btn ghost" id="s_testigdb">Testuj IGDB</button>
             <span id="s_igdbres" class="muted"></span></div>
+          <div class="inln"><button class="btn ghost" id="s_series"
+              title="Rozpoznaje w IGDB, do jakiej serii należy każda gra. Wynik wykorzystuje PyLinksDeck, żeby układać gry jednej serii obok siebie.">🔗 Rozpoznaj serie gier (dla PyLinksDeck)</button>
+            <label class="chk mini"><input id="s_seriesForce" type="checkbox"> sprawdź ponownie wszystkie</label>
+            <span id="s_seriesres" class="muted"></span></div>
           <div class="inln"><button class="btn ghost" id="s_testtgdb">Testuj TheGamesDB</button>
             <span id="s_tgdbres" class="muted"></span></div>
           <label class="chk"><input id="s_ss" type="checkbox"> ScreenScraper.fr (okładki arcade po nazwie setu MAME)</label>

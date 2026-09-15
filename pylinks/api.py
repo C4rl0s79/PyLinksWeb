@@ -1013,6 +1013,95 @@ class Api:
                 "error": res.get("error"), "missing": braki,
                 "sent": {k: len(v) for k, v in tag_appids.items()}}
 
+    def series_detect(self, force: bool = False) -> dict:
+        """Rozpoznaje serie gier w IGDB — w tle, z paskiem postępu.
+
+        Wynik (tabela `game_series`) czyta PyLinksDeck, żeby układać gry jednej
+        serii obok siebie. Gry już sprawdzone są pomijane, chyba że `force`.
+        """
+        import threading
+        from pylinks.services import series as _series
+        from pylinks.services.extra_art import ExtraArtSources
+        from pylinks.core import log as _log
+        if self._job_busy():
+            return {"started": False, "reason": "zadanie już trwa"}
+        cfg = _load_config()
+        src = ExtraArtSources(cfg)
+        if not (src.igdb_client_id and getattr(src, "igdb_client_secret", "")):
+            return {"started": False, "reason": "brak kluczy IGDB (Ustawienia → źródła)"}
+        gry = []
+        for g in list(self._pc_games) + list(self._rom_games):
+            gry.append({"key": _game_key(g), "name": g.get("name", ""),
+                        "platform": g.get("system", "") if g.get("source") == "rom" else "PC"})
+        # MAME: WYŁĄCZNIE gry, które mają skrót w LINKS\MAME — tylko te pokazuje
+        # Deck, a przedzieranie się przez całą bibliotekę arcade (tysiące tytułów)
+        # nie ma sensu. Bez tego automaty lądowały za blokiem serii, choć wersje
+        # arcade wychodziły przed portami na PS1.
+        gry += self._mame_shortcut_games()
+        if not gry:
+            return {"started": False, "reason": "brak gier — najpierw skan"}
+        self._job_reset("series", len(gry))
+
+        def _worker():
+            def _p(i, tot, name):
+                self._job["total"] = max(1, tot)
+                self._job["done"] = i
+                self._job["current"] = name
+            try:
+                res = _series.detect(src._igdb_query, gry, CACHE_DIR, force=force,
+                                     progress=_p,
+                                     cancel=lambda: self._job.get("cancel"))
+                _log.write("serie", f"rozpoznawanie: {res}")
+            except Exception as ex:
+                res = {"error": str(ex)}
+            self._job["running"] = False
+            self._job["current"] = ""
+            self._job["result"] = dict(res, kind="series")
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return {"started": True, "total": len(gry)}
+
+    def _mame_shortcut_games(self) -> list:
+        """Gry MAME ze skrótów w LINKS/MAME, z kluczem liczonym jak w PyLinksDeck.
+
+        Deck bierze zestaw jako ostatni argument skrótu bez myślnika
+        (`-rompath "…" tekken2ud` → `tekken2ud`) — robimy dokładnie to samo,
+        żeby klucz `mame::<zestaw>` trafił bez żadnych przybliżeń.
+        """
+        d = LINKS_DIR / "MAME"
+        if not d.is_dir():
+            return []
+        out = []
+        try:
+            import pythoncom, win32com.client  # type: ignore
+            pythoncom.CoInitialize()
+            sh = win32com.client.Dispatch("WScript.Shell")
+        except Exception:
+            return []
+        try:
+            for f in sorted(d.glob("*.lnk")):
+                try:
+                    args = sh.CreateShortcut(str(f)).Arguments or ""
+                except Exception:
+                    continue
+                toks = [t for t in args.replace('"', " ").split() if not t.startswith("-")]
+                if not toks:
+                    continue
+                out.append({"key": f"mame::{toks[-1].lower()}", "name": f.stem.strip(),
+                            "platform": "MAME"})
+        finally:
+            try:
+                import gc
+                gc.collect()
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
+        return out
+
+    def series_summary(self) -> dict:
+        from pylinks.services import series as _series
+        return _series.summary(CACHE_DIR)
+
     def steam_running(self) -> dict:
         from pylinks.services import steam_export as _se
         return {"running": _se.is_steam_running()}
