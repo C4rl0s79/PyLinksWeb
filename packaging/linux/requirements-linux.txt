@@ -1,0 +1,11 @@
+# Zależności PyLinksWeb na Linuksie (instaluje install.sh do .venv).
+
+pywebview>=5.0     # okno aplikacji (backend GTK z systemu albo Qt przez --qt)
+Pillow>=10.0       # kadrowanie okładek, grzbiety platform, ikony PNG
+
+# Świadomie POMINIĘTE:
+# - pywin32 — skróty na Linuksie to pliki .desktop, tworzone bez COM-a.
+# - PyGObject — pywebview w wariancie GTK bierze je z pakietów systemowych
+#   (python3-gi + gir1.2-webkit2), dlatego venv powstaje z
+#   --system-site-packages. Kompilacja PyGObject z pipa wymaga nagłówków
+#   cairo/girepository i regularnie się wywraca.

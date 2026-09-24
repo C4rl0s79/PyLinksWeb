@@ -1,6 +1,6 @@
 :root{
   --bg:#1e1e2e; --bg2:#181825; --bg3:#313244;
-  --fg:#cdd6f4; --fg2:#6c7086;
+  --fg:#cdd6f4; --fg2:#c3cadf;   /* rozjaśnione — ciemnoszary był nieczytelny */
   --acc:#89b4fa; --grn:#a6e3a1; --red:#f38ba8;
   --yel:#f9e2af; --ext:#cba6f7; --orn:#fab387;
   --radius:10px;
@@ -32,7 +32,10 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 }
 .badge.ok{background:rgba(166,227,161,.15);color:var(--grn)}
 .badge.err{background:rgba(243,139,168,.15);color:var(--red)}
-.actions{display:flex;gap:8px}
+.actions{display:flex;gap:8px;align-items:center}
+.sizer{display:flex;align-items:center;gap:6px;color:var(--fg2);font-size:14px;
+  background:var(--bg3);padding:5px 10px;border-radius:8px}
+.sizer input[type=range]{width:110px;accent-color:var(--acc);cursor:pointer}
 
 .btn{
   background:var(--acc); color:var(--bg); border:0; cursor:pointer;
@@ -68,13 +71,40 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 .plat-item.active .count{background:rgba(30,30,46,.25);color:var(--bg)}
 
 /* ── Content ── */
-.content{flex:1;min-width:0;display:flex;flex-direction:column;padding:16px 20px}
-.content-head{display:flex;align-items:baseline;gap:12px;margin-bottom:12px}
+.content{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;padding:16px 20px}
+.content-head{display:flex;align-items:center;gap:12px;margin-bottom:12px}
 .content-head h1{font-size:20px;margin:0}
+.selbar{display:flex;align-items:center;gap:6px;margin-left:12px}
+.selbar[hidden]{display:none}
+.chip{
+  background:var(--bg3); color:var(--fg); border:0; cursor:pointer;
+  padding:5px 10px; border-radius:999px; font-size:12px;
+}
+.chip:hover{background:#45475a}
+#selCount{font-size:12px;margin-left:4px}
+/* checkbox zaznaczenia na karcie */
+.card .pick{
+  position:absolute; top:6px; right:6px; z-index:4; width:20px; height:20px;
+  border-radius:5px; border:2px solid rgba(255,255,255,.6); background:rgba(17,17,27,.55);
+  cursor:pointer; display:flex; align-items:center; justify-content:center;
+  font-size:13px; color:transparent; line-height:1;
+}
+.card.sel .pick{background:var(--grn); border-color:var(--grn); color:#11111b}
+.card.sel{outline:2px solid var(--grn); outline-offset:-2px}
+.filter{
+  margin-left:auto; min-width:220px;
+  background:var(--bg2); color:var(--fg); border:1px solid var(--bg3);
+  border-radius:8px; padding:7px 11px; font-size:13px; outline:none;
+}
+.filter:focus{border-color:var(--acc)}
 .grid{
-  flex:1; overflow-y:auto;
-  display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
-  gap:14px; align-content:start; padding-right:6px;
+  flex:1 1 auto; min-height:0; overflow-y:auto;      /* min-height:0 = warunek scrolla we flex */
+  display:grid; grid-template-columns:repeat(auto-fill, var(--card-size,160px));  /* rozmiar ze suwaka */
+  /* WYMUSZONA wysokość wierszy — bez tego grid ściska wiersze, by zmieścić
+     wszystkie karty w kontenerze (zamiast przewijać). max-content = wiersz
+     dokładnie tak wysoki jak zawartość, nadmiar → scroll. */
+  grid-auto-rows:max-content;
+  gap:14px; align-content:start; justify-content:start; padding-right:6px;
 }
 .welcome{grid-column:1/-1;max-width:640px}
 .welcome p{margin:6px 0}
@@ -84,14 +114,63 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
   overflow:hidden; cursor:pointer; transition:border-color .12s, transform .06s;
 }
 .card:hover{border-color:var(--acc); transform:translateY(-2px)}
+/* Ramka miniatury — DOKŁADNIE formuła pickera (stała wysokość px + contain),
+   bo to działa w tym WebView2 (aspect-ratio/height:auto — nie). Kolumny .grid
+   są stałej szerokości 160px, więc height:160px = kwadrat. */
 .card .thumb{
-  aspect-ratio:1/1; background:var(--bg3);
-  display:flex; align-items:center; justify-content:center;
-  color:var(--fg2); font-size:34px;
+  position:relative; width:100%; height:var(--card-size,160px); background:var(--bg3);
+  color:var(--fg2); overflow:hidden;
 }
+.grid.mode-steam .card .thumb{height:calc(var(--card-size,160px) * 1.5)}   /* portret 2:3 (Steam) */
+.card .thumb img{display:block; width:100%; height:100%; object-fit:contain}
+.card .thumb .ph{
+  position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  font-size:34px;
+}
+.card .thumb.loading .ph{opacity:.5}
+/* tryb Kadruj — przeciąganie bezpośrednio na obrazku */
+.card .thumb.cropping{cursor:ns-resize; outline:2px solid var(--yel); outline-offset:-2px}
+.card .thumb.cropping::after{
+  content:"↕ przeciągnij • klik = OK • Esc = anuluj"; position:absolute; z-index:5;
+  left:0; right:0; bottom:0; padding:3px 5px; font-size:9px; text-align:center;
+  background:rgba(17,17,27,.75); color:var(--yel);
+}
+/* ── grzbiet platformy (spine) ── */
+.card .thumb .spine{
+  position:absolute; top:0; bottom:0; width:var(--spine-w,22%); z-index:2;
+  background:#141414; display:flex; align-items:center; justify-content:center;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);
+}
+.card .thumb.spine-left  .spine{left:0; border-right:2px solid rgba(0,0,0,.5)}
+.card .thumb.spine-right .spine{right:0; border-left:2px solid rgba(0,0,0,.5)}
+/* logo: krótki bok = szerokość grzbietu (height), długi biegnie pionowo po obrocie */
+.card .thumb .spine img{
+  height:16%; width:auto; max-width:calc(var(--card-size,160px) * 0.94);
+  transform:rotate(-90deg);
+}
+.card .thumb.spine-right .spine img{transform:rotate(90deg)}
+/* grafika ustępuje miejsca grzbietowi */
+.card .thumb.spine-left  img.cover{position:absolute;top:0;height:100%;
+  left:var(--spine-w,22%);width:calc(100% - var(--spine-w,22%))}
+.card .thumb.spine-right img.cover{position:absolute;top:0;height:100%;
+  left:0;width:calc(100% - var(--spine-w,22%))}
+.card .thumb .src{
+  position:absolute;top:6px;left:6px;font-size:10px;font-weight:700;
+  padding:2px 7px;border-radius:999px;background:var(--bg2);color:var(--fg);
+  text-transform:uppercase;letter-spacing:.4px;
+}
+.src-steam{color:var(--acc)!important} .src-gog{color:var(--ext)!important}
+.src-epic{color:var(--yel)!important}  .src-extra{color:var(--orn)!important}
+.src-rom{color:var(--grn)!important}
 .card .cap{padding:8px 10px;font-size:12px;display:flex;flex-direction:column;gap:2px}
 .card .cap .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card .cap .p{color:var(--fg2);font-size:11px}
+
+/* spinner skanu */
+.scanning{grid-column:1/-1;display:flex;align-items:center;gap:12px;color:var(--fg2)}
+.spin{width:18px;height:18px;border:3px solid var(--bg3);border-top-color:var(--acc);
+  border-radius:50%;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
 
 /* ── Statusbar ── */
 .statusbar{
@@ -102,8 +181,364 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 .pill{background:var(--bg3);color:var(--fg2);padding:2px 10px;border-radius:999px}
 .pill.ok{color:var(--grn)} .pill.err{color:var(--red)}
 
+/* ── Menu kontekstowe ── */
+.ctx{
+  position:fixed; z-index:70; min-width:200px;
+  background:var(--bg2); border:1px solid var(--bg3); border-radius:10px;
+  box-shadow:0 12px 34px rgba(0,0,0,.5); padding:6px; overflow:hidden;
+}
+.ctx[hidden]{display:none}
+.ctx-item{
+  display:block; width:100%; text-align:left; background:transparent;
+  color:var(--fg); border:0; cursor:pointer; padding:9px 12px;
+  border-radius:7px; font-size:13px;
+}
+.ctx-item:hover{background:var(--bg3)}
+
+/* ── Kolekcje serii ── */
+.coll-body{flex:1 1 auto;min-height:0;display:flex;gap:14px;padding:14px 16px}
+.coll-left{width:240px;flex:0 0 auto;display:flex;flex-direction:column;gap:8px;min-height:0}
+.coll-newrow{display:flex;gap:6px}
+.coll-newrow input{flex:1;background:var(--bg2);color:var(--fg);border:1px solid var(--bg3);border-radius:7px;padding:7px 9px;font-size:13px;outline:none}
+.coll-list{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:4px}
+.coll-list button{text-align:left;background:var(--bg3);color:var(--fg);border:0;cursor:pointer;padding:8px 10px;border-radius:7px;font-size:13px;display:flex;justify-content:space-between;gap:8px}
+.coll-list button.active{background:var(--acc);color:var(--bg);font-weight:600}
+.coll-list .n{background:var(--bg);color:var(--fg2);border-radius:999px;padding:0 7px;font-size:11px}
+.coll-list button.active .n{background:rgba(30,30,46,.25);color:var(--bg)}
+.coll-right{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;gap:12px}
+.coll-rt-title{font-weight:700;font-size:14px}
+.coll-sec{display:flex;flex-direction:column;gap:6px;min-height:0;flex:1}
+.coll-sec-h{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--fg2);display:flex;align-items:center;gap:8px}
+.coll-sec-h input{margin-left:auto;background:var(--bg2);color:var(--fg);border:1px solid var(--bg3);border-radius:6px;padding:4px 8px;font-size:12px;outline:none}
+.coll-scroll{flex:1;min-height:0;overflow-y:auto;border:1px solid var(--bg3);border-radius:8px;padding:4px}
+.coll-item{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;font-size:12px;cursor:pointer}
+.coll-item:hover{background:var(--bg3)}
+.coll-item .plat{color:var(--fg2);font-size:11px;margin-left:auto;background:var(--bg3);padding:1px 7px;border-radius:999px}
+.coll-item .x{color:var(--red);cursor:pointer;font-weight:700}
+
+/* ── Ustawienia ── */
+.set-body{flex:1 1 auto;min-height:0;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:18px}
+.set-sec{display:flex;flex-direction:column;gap:9px}
+.set-sec h3{margin:0 0 2px;font-size:14px;color:var(--acc)}
+.set-sec label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--fg2)}
+.set-sec label.chk{flex-direction:row;align-items:center;gap:8px;color:var(--fg);font-size:13px;cursor:pointer}
+.set-sec input[type=text],.set-sec select,.set-sec textarea{
+  background:var(--bg2);color:var(--fg);border:1px solid var(--bg3);border-radius:7px;
+  padding:7px 10px;font-size:13px;outline:none;font-family:inherit;resize:vertical;
+}
+.set-sec input[type=text]:focus,.set-sec select:focus,.set-sec textarea:focus{border-color:var(--acc)}
+.set-sec .inln{display:flex;gap:8px}
+.set-sec .inln input{flex:1}
+.set-foot{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:12px 20px;border-top:1px solid var(--bg3);background:var(--bg2)}
+.rom-tbl-wrap{overflow-x:auto;border:1px solid var(--bg3);border-radius:8px}
+.rom-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.rom-tbl th{background:var(--bg2);color:var(--fg2);text-align:left;padding:6px 8px;font-weight:600}
+.rom-tbl td{padding:3px 5px;border-top:1px solid var(--bg3)}
+.rom-tbl input[type=text]{width:100%;min-width:70px;background:var(--bg);color:var(--fg);border:1px solid var(--bg3);border-radius:5px;padding:5px 6px;font-size:12px}
+.rom-tbl td.sub{text-align:center}
+.rom-tbl .del{background:transparent;border:0;color:var(--red);cursor:pointer;font-size:14px}
+.rom-tbl td.emu{display:flex;gap:4px;align-items:center;min-width:180px}
+.rom-tbl td.emu input{flex:1}
+.btn.mini{padding:5px 8px;font-size:12px;flex:0 0 auto}
+.emu-pop{
+  position:fixed; z-index:80; min-width:220px; max-height:280px; overflow-y:auto;
+  background:var(--bg2); border:1px solid var(--bg3); border-radius:9px;
+  box-shadow:0 12px 30px rgba(0,0,0,.5); padding:5px;
+}
+.emu-pop[hidden]{display:none}
+.emu-pop button{display:block;width:100%;text-align:left;background:transparent;border:0;
+  color:var(--fg);cursor:pointer;padding:7px 10px;border-radius:6px;font-size:12px}
+.emu-pop button:hover{background:var(--bg3)}
+.emu-pop .ra{color:var(--grn)}
+
+/* ── Okno kadrowania (chwyć i przeciągnij) ── */
+.crop-wrap{padding:18px;display:flex;flex-direction:column;align-items:center;gap:12px}
+.crop-frame{
+  width:min(70vh,420px); height:min(70vh,420px); overflow:hidden; border-radius:12px;
+  background:repeating-conic-gradient(var(--bg3) 0% 25%,var(--bg2) 0% 50%) 50%/22px 22px;
+  cursor:grab; touch-action:none; user-select:none;
+}
+.crop-frame.drag{cursor:grabbing}
+.crop-frame img{width:100%; height:100%; object-fit:cover; display:block; pointer-events:none; -webkit-user-drag:none}
+.crop-hint{font-size:12px}
+.crop-actions{display:flex;gap:8px}
+
+/* ── Modal wyboru okładki ── */
+.modal{
+  position:fixed; inset:0; z-index:50;
+  background:rgba(17,17,27,.72); backdrop-filter:blur(2px);
+  display:flex; align-items:center; justify-content:center; padding:24px;
+}
+.modal[hidden]{display:none}
+.modal-box{
+  width:min(920px,95vw); height:82vh; max-height:92vh; min-width:420px; min-height:320px;
+  display:flex; flex-direction:column;
+  background:var(--bg); border:1px solid var(--bg3); border-radius:14px;
+  box-shadow:0 20px 60px rgba(0,0,0,.5); overflow:hidden;
+  resize:both;                       /* zmienialny rozmiar; zapamiętywany w localStorage */
+}
+.modal-head,.modal-search{flex:0 0 auto}
+.modal-head{
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:14px 18px; background:var(--bg2); border-bottom:1px solid var(--bg3);
+}
+.modal-title{font-weight:700;font-size:16px}
+.modal-sub{font-size:12px}
+.modal-search{display:flex;gap:8px;padding:12px 18px;border-bottom:1px solid var(--bg3)}
+.pk-field{position:relative; flex:1}
+.modal-search input{
+  width:100%; background:var(--bg2); color:var(--fg); border:1px solid var(--bg3);
+  border-radius:8px; padding:9px 12px; font-size:13px; outline:none;
+}
+.modal-search input:focus{border-color:var(--acc)}
+.pk-suggest{
+  position:absolute; left:0; right:0; top:calc(100% + 4px); z-index:60;
+  background:var(--bg2); border:1px solid var(--bg3); border-radius:8px;
+  box-shadow:0 12px 30px rgba(0,0,0,.45); overflow:hidden; max-height:280px; overflow-y:auto;
+}
+.pk-suggest[hidden]{display:none}
+.pk-sug{
+  display:flex; align-items:baseline; gap:8px; padding:8px 12px; cursor:pointer;
+  font-size:13px; border-bottom:1px solid var(--bg3);
+}
+.pk-sug:last-child{border-bottom:0}
+.pk-sug:hover,.pk-sug.active{background:var(--bg3)}
+.pk-sug .yr{color:var(--fg2); font-size:11px; margin-left:auto}
+.pk-progress{display:flex;align-items:center;gap:10px;padding:8px 18px 0}
+.pk-progress[hidden]{display:none}
+.pk-bar{flex:1;height:6px;background:var(--bg3);border-radius:999px;overflow:hidden}
+.pk-bar-fill{height:100%;width:0;background:var(--acc);transition:width .15s ease}
+.pk-bar-txt{font-size:11px;white-space:nowrap}
+.pk-grid{
+  flex:1 1 auto; min-height:0; overflow-y:auto;      /* scroll siatki kandydatów */
+  padding:16px 18px; display:grid; gap:12px; justify-content:start;
+  grid-template-columns:repeat(auto-fill, 150px);    /* STAŁY rozmiar kafelka (nie rozciąga się z oknem) */
+  grid-auto-rows:max-content; align-content:start;   /* nie ściskaj wierszy — nadmiar → scroll */
+}
+.pk-item{
+  cursor:pointer; border:2px solid transparent; border-radius:10px; overflow:hidden;
+  background:var(--bg2); transition:border-color .1s, transform .06s;
+  display:flex; flex-direction:column;
+}
+.pk-item:hover{border-color:var(--acc); transform:translateY(-2px)}
+/* CAŁA grafika widoczna: stała wysokość kafelka + contain (nigdy nie przycinamy) */
+.pk-item img{width:100%; height:150px; object-fit:contain; background:var(--bg3); display:block}
+.pk-item .meta{font-size:10px;color:var(--fg2);padding:4px 6px;text-align:center}
+.pk-item.sq{border-color:rgba(166,227,161,.35)}
+.pk-item .kind{font-weight:700;text-transform:uppercase;letter-spacing:.3px}
+.kind-ikona{color:var(--grn)} .kind-kwadrat{color:var(--acc)} .kind-plakat{color:var(--orn)}
+.pk-empty,.pk-loading{
+  grid-column:1/-1; display:flex; align-items:center; gap:12px;
+  color:var(--fg2); padding:20px 0; justify-content:center;
+}
+.pk-item.busy{opacity:.5}
+.pk-item.broken{display:none}   /* nie pokazuj pustych ramek — użyj ↻ Odśwież */
+
+/* ── tryb Steam: sekcje typów (grid / hero / logo) ── */
+.pk-grid.steam{display:block}
+.pk-sec{margin-bottom:18px}
+.pk-sec-h{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+  color:var(--fg2);margin:0 2px 8px}
+.pk-row{display:flex;gap:10px;overflow-x:auto;padding-bottom:8px}
+.pk-row .pk-item{flex:0 0 auto; width:auto; position:relative}
+/* poziome paski: pełny obraz w naturalnych proporcjach (contain), stała wysokość */
+.pk-row .pk-item img{height:180px; width:auto; max-width:360px; object-fit:contain; background:var(--bg3)}
+.pk-row-logo .pk-item img{
+  background:repeating-conic-gradient(var(--bg3) 0% 25%,var(--bg2) 0% 50%) 50%/16px 16px}
+
 /* płynny, natywny scroll — koniec z bólem tkintera */
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-thumb{background:var(--bg3);border-radius:8px}
 ::-webkit-scrollbar-thumb:hover{background:#45475a}
 ::-webkit-scrollbar-track{background:transparent}
+
+/* ── Edytor logo grzbietu ── */
+.logo-ed{display:flex;flex-direction:column;gap:14px;padding:4px 2px}
+.logo-ed-top{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap}
+.logo-ed-top label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--fg2)}
+.logo-ed-top select{min-width:200px}
+.logo-ed-body{display:grid;grid-template-columns:280px 1fr;gap:18px;min-height:0}
+.logo-ed-preview{display:flex;flex-direction:column}
+.logo-ed-prev-img{width:256px;height:256px;object-fit:contain;border-radius:10px;
+  background:repeating-conic-gradient(var(--bg3) 0% 25%,var(--bg2) 0% 50%) 50%/18px 18px;
+  border:1px solid var(--bg3)}
+.logo-ed-scale{margin-top:12px;display:flex;flex-direction:column;gap:6px}
+.logo-ed-scale input[type=range]{width:256px}
+.logo-ed-variants{min-width:0;display:flex;flex-direction:column;min-height:0}
+.logo-var-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));
+  gap:8px;overflow-y:auto;max-height:360px;align-content:start;grid-auto-rows:max-content;padding:2px}
+.logo-var{border:2px solid transparent;border-radius:8px;cursor:pointer;padding:6px;
+  background:repeating-conic-gradient(#2a2a33 0% 25%,#20202a 0% 50%) 50%/12px 12px;
+  display:flex;align-items:center;justify-content:center;height:80px}
+.logo-var:hover{border-color:var(--acc2,#89b4fa)}
+.logo-var.sel{border-color:var(--acc,#a6e3a1)}
+.logo-var img{max-width:100%;max-height:68px;object-fit:contain}
+
+/* ── lista dodatkowych folderów (Extra) ── */
+.dir-list{display:flex;flex-direction:column;gap:4px;margin:4px 0}
+.dir-list:empty{display:none}
+.dir-item{display:flex;align-items:center;gap:8px;background:var(--bg3,#313244);
+  border-radius:6px;padding:4px 6px 4px 10px}
+.dir-item .dir-path{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-size:12px}
+.dir-item .dir-del{background:none;border:none;color:var(--fg2,#a6adc8);
+  cursor:pointer;font-size:14px;padding:2px 6px;border-radius:4px}
+.dir-item .dir-del:hover{background:rgba(243,139,168,.2);color:#f38ba8}
+
+/* ── pasek prefetchu grafik Steam (pod topbarem) ── */
+.pf-bar{display:flex;align-items:center;gap:10px;padding:6px 16px;
+  background:var(--bg2);border-bottom:1px solid var(--bg3)}
+.pf-bar[hidden]{display:none}
+.pf-track{flex:1;height:8px;background:var(--bg3);border-radius:999px;overflow:hidden}
+.pf-fill{height:100%;width:0;background:var(--acc);border-radius:999px;
+  transition:width .25s ease}
+.pf-txt{font-size:12px;color:var(--fg2);white-space:nowrap;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;max-width:46%}
+/* .btn.mini definiowane wyżej (z flex:0 0 auto) — nie duplikować */
+
+/* nagłówek menu grupy (prawy klik na grupie PC/ROM) */
+.ctx .ctx-head{padding:6px 12px 4px;font-size:11px;text-transform:uppercase;
+  letter-spacing:.5px;color:var(--fg2);border-bottom:1px solid var(--bg3);margin-bottom:4px}
+
+/* ── tryb Steam: pasek „Wybrane" (aktualne grid/tło/logo) ── */
+.pk-current{margin-bottom:14px;padding:10px;background:var(--bg2);
+  border:1px solid var(--bg3);border-radius:10px}
+.pk-cur-h{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+  color:var(--fg2);margin-bottom:8px}
+.pk-cur-row{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end}
+.pk-cur-slot{display:flex;flex-direction:column;gap:4px}
+.pk-cur-lbl{font-size:11px;color:var(--fg2)}
+.pk-cur-img{height:96px;width:auto;max-width:260px;object-fit:contain;
+  border-radius:6px;background:var(--bg3);border:2px solid var(--grn)}
+.pk-cur-logo{background:repeating-conic-gradient(var(--bg3) 0% 25%,var(--bg2) 0% 50%) 50%/14px 14px}
+.pk-cur-none{height:96px;min-width:120px;display:flex;align-items:center;
+  justify-content:center;color:var(--fg2);font-size:12px;background:var(--bg3);
+  border:1px dashed #45475a;border-radius:6px}
+/* wybrany wariant w wierszu — wyraźniejszy */
+.pk-item.chosen{border-color:var(--grn);box-shadow:0 0 0 2px var(--grn)}
+.pk-item.chosen::after{content:"✓";position:absolute;top:4px;right:4px;z-index:3;
+  width:20px;height:20px;border-radius:50%;background:var(--grn);color:#11111b;
+  font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center}
+
+/* ── picker: „pokaż więcej" + regulacja wielkości miniatur ── */
+.pk-more{display:flex;align-items:center;gap:10px;padding:10px 2px 2px;
+  justify-content:center;flex:0 0 auto}
+.pk-more[hidden]{display:none}
+/* --pk-size ustawia suwak; obie formy miniatur (siatka i paski Steam) z niego korzystają */
+.pk-grid{--pk-size:150px}
+.pk-item img{height:var(--pk-size,150px)}
+.pk-grid:not(.steam){grid-template-columns:repeat(auto-fill,minmax(calc(var(--pk-size,150px) * 0.95),1fr))}
+.pk-row .pk-item img{height:calc(var(--pk-size,150px) * 1.2);
+  max-width:calc(var(--pk-size,150px) * 2.4)}
+
+/* ── tabela wyników „Testuj wszystkie API" ── */
+.test-tbl{display:flex;flex-direction:column;gap:4px;margin-top:8px}
+.test-tbl[hidden]{display:none}
+.test-row{display:flex;align-items:center;gap:10px;font-size:12px;
+  background:var(--bg3);border-radius:6px;padding:5px 10px}
+.test-row .t-name{min-width:150px;font-weight:600}
+.test-row .t-msg{color:var(--fg2);min-width:0;overflow:hidden;text-overflow:ellipsis}
+.test-row.ok .t-name{color:var(--grn)}
+.test-row.err .t-name{color:var(--red)}
+
+/* ── biblioteka arcade (MAME) ── */
+.genre-box{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;max-height:190px;overflow-y:auto}
+.genre-box[hidden]{display:none}
+.genre-chip{display:flex;align-items:center;gap:6px;background:var(--bg3);
+  border-radius:999px;padding:4px 10px;font-size:12px;cursor:pointer;user-select:none}
+.genre-chip input{margin:0;accent-color:var(--acc)}
+.genre-chip .n{color:var(--fg2);font-size:11px}
+.ver-list{flex:1;min-height:0;overflow-y:auto;padding:10px 16px;display:flex;
+  flex-direction:column;gap:6px}
+.ver-row{display:flex;align-items:center;gap:10px;background:var(--bg2);
+  border:1px solid var(--bg3);border-radius:8px;padding:8px 12px;cursor:pointer}
+.ver-row:hover{border-color:var(--acc)}
+.ver-row.sel{border-color:var(--grn);box-shadow:0 0 0 1px var(--grn)}
+.ver-row .v-set{font-weight:700;min-width:110px}
+.ver-row .v-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;color:var(--fg2);font-size:12px}
+.ver-row .v-stat{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--bg3)}
+.ver-row .v-stat.ok{background:rgba(166,227,161,.18);color:var(--grn)}
+.ver-row .v-stat.bad{background:rgba(243,139,168,.18);color:var(--red)}
+
+/* lista wyboru wersji na kafelku arcade (zamiast statycznego podpisu) */
+.card .cap .ver-sel{
+  width:100%; max-width:100%; background:var(--bg3); color:var(--fg);
+  border:1px solid transparent; border-radius:6px; font-size:11px;
+  padding:2px 4px; cursor:pointer; outline:none;
+}
+.card .cap .ver-sel:hover{border-color:var(--acc)}
+.card .cap .ver-sel:focus{border-color:var(--acc)}
+
+/* Dziennik zdarzeń w Ustawieniach — monospace, własny pasek przewijania. */
+.logbox{
+  max-height: 260px; overflow: auto; margin: 6px 0 10px;
+  padding: 8px 10px; border-radius: 8px;
+  background: var(--bg-2, #12151a); border: 1px solid var(--line, #2a2f38);
+  font: 12px/1.45 Consolas, "Cascadia Mono", monospace;
+  white-space: pre-wrap; word-break: break-word;
+}
+
+/* Pasek stanu — pokazuje, że coś się dzieje w tle (dotąd nie było o tym śladu). */
+.busy-bar{
+  position: fixed; left: 12px; bottom: 12px; z-index: 60;
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-radius: 999px;
+  background: var(--bg-2, #12151a); border: 1px solid var(--line, #2a2f38);
+  font-size: 12px; color: var(--fg, #e6e8ec); box-shadow: 0 6px 20px #0008;
+}
+/* Klasa z własnym `display` nadpisuje wbudowane ukrywanie atrybutem `hidden`,
+   więc każdy taki element MUSI mieć własną regułę — inaczej wisi na ekranie. */
+.busy-bar[hidden]{display:none}
+.busy-dot{
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--acc, #6aa6ff); animation: busyPulse 1s infinite ease-in-out;
+}
+@keyframes busyPulse{ 0%,100%{opacity:.3} 50%{opacity:1} }
+
+/* Konsola — dziennik na żywo, bez szukania pliku na dysku. */
+.con-panel{
+  position: fixed; right: 12px; bottom: 12px; z-index: 61;
+  width: min(760px, 92vw); height: min(420px, 60vh);
+  display: flex; flex-direction: column;
+  border-radius: 10px; overflow: hidden;
+  background: var(--bg-2, #12151a); border: 1px solid var(--line, #2a2f38);
+  box-shadow: 0 10px 40px #000a;
+}
+.con-panel[hidden]{display:none}
+.con-head{
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-bottom: 1px solid var(--line, #2a2f38);
+  font-size: 12px; color: var(--fg, #e6e8ec);
+}
+.con-box{
+  flex: 1; margin: 0; padding: 8px 10px; overflow: auto;
+  font: 12px/1.45 Consolas, "Cascadia Mono", monospace;
+  white-space: pre-wrap; word-break: break-word; color: var(--fg, #e6e8ec);
+}
+
+/* Okno kategorii arcade — drzewo dwupoziomowe z catver.ini. */
+.cat-box{ width: min(900px, 94vw); height: min(680px, 88vh);
+  display: flex; flex-direction: column; }
+.cat-box[hidden]{display:none}
+.cat-hint{ padding: 4px 12px 8px; font-size: 12px; }
+.cat-tree{ flex: 1; overflow: auto; padding: 0 12px 8px; }
+.cat-tree[hidden]{display:none}
+.cat-grp{ border-bottom: 1px solid var(--line, #2a2f38); padding: 6px 0; }
+.cat-grp:last-child{ border-bottom: 0; }
+.cat-row{ display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.cat-row.top{ font-weight: 600; }
+.cat-row span{ margin-right: 2px; }
+.cat-row .n{ color: var(--muted, #8b93a7); font-size: 12px; margin-left: 8px; }
+.cat-row .mat{ color: #e0a34a; font-size: 11px; margin-left: 10px; }
+.cat-row .cat-toggle{ margin-left: 10px; }
+.cat-row label, .cat-row input{ cursor: pointer; }
+.cat-subs{ margin: 2px 0 2px 26px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 1px 14px; }
+.cat-subs[hidden]{display:none}
+.cat-toggle{ background: none; border: 0; color: var(--muted, #8b93a7);
+  cursor: pointer; font-size: 12px; padding: 0 2px; }
+#catFilter{ width: 200px; }
+/* podkategorie w panelu bocznym */
+.plat-item.sub{ padding-left: 26px; font-size: 12px; }

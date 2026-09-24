@@ -21,7 +21,14 @@ Reports/
 # build / pakowanie
 build/
 dist/
+build_out.log
+# ignorujemy wszystkie .spec OPRÓCZ naszego (komentarz MUSI być w osobnej linii —
+# w .gitignore '#' nie jest komentarzem inline i psuł negację)
 *.spec
+!pylinks_web.spec
+
+# testy (nie idą na GitHub — absolutne minimum)
+tests/
 
 # IDE / OS
 .idea/

@@ -26,10 +26,8 @@ SCRIPT_DIR = (
     if getattr(sys, "frozen", False)
     else Path(__file__).resolve().parent.parent
 )
-CACHE_DIR   = SCRIPT_DIR / "Cache"    # baza SQLite + pobrane grafiki
+CACHE_DIR   = SCRIPT_DIR / "Cache"    # pobrane grafiki + upieczone ikony
 LINKS_DIR   = SCRIPT_DIR / "LINKS"    # skróty (.lnk/.url) pogrupowane per platforma
-REPORTS_DIR = SCRIPT_DIR / "Reports"  # raporty HTML / TXT z tworzenia skrótów
 
 # FIX v7.4: config w katalogu programu (obok Cache/ i LINKS/), nie w $HOME
 CONFIG_PATH = SCRIPT_DIR / "config.json"
-_LEGACY_CONFIG_PATH = Path.home() / ".create-links-config.json"
