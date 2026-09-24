@@ -1061,6 +1061,102 @@ class Api:
         threading.Thread(target=_worker, daemon=True).start()
         return {"started": True, "total": len(gry)}
 
+    # --- skróty wskazujące nieistniejące pliki ROM (po konwersji kolekcji) ---
+    def links_check(self) -> dict:
+        """Sprawdza wszystkie skróty w LINKS — w tle, postęp przez job_status.
+
+        Nie wymaga skanu ROM-ów: patrzy tylko na ścieżki zapisane w skrótach."""
+        import threading
+        from pylinks.services import link_check as _lc
+        from pylinks.core import log as _log
+        if self._job_busy():
+            return {"started": False, "reason": "zadanie już trwa"}
+        if not LINKS_DIR.is_dir():
+            return {"started": False, "reason": "brak katalogu LINKS"}
+        self._job_reset("links_check", 0)
+
+        def _worker():
+            def _p(i, tot, name):
+                self._job["total"] = tot
+                self._job["done"] = i
+                self._job["current"] = name
+            try:
+                res = _lc.check_links(LINKS_DIR, progress=_p,
+                                      cancel=lambda: self._job.get("cancel"))
+                self._links_report = {it["file"]: it for it in res["items"]}
+                fixable = sum(1 for it in res["items"]
+                              if any(i.get("fixable") for i in it["issues"]))
+                _log.write("links", f"sprawdzenie skrótów: {res['checked']} skrótów, "
+                                    f"{len(res['items'])} z problemem, "
+                                    f"{fixable} do naprawy")
+                res = dict(res, fixable=fixable)
+            except Exception as ex:
+                res = {"error": str(ex), "items": []}
+            self._job["running"] = False
+            self._job["current"] = ""
+            self._job["result"] = dict(res, kind="links_check")
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return {"started": True}
+
+    def links_fix(self, files: list, fix_m3u: bool = True) -> dict:
+        """Naprawia wskazane skróty (i ich .m3u) wg ostatniego sprawdzenia.
+
+        Paczkami z UI (most jest synchroniczny). Zwraca też pary ścieżek
+        old→new, które UI zbiera do jednej aktualizacji Steama na końcu."""
+        from pylinks.services import link_check as _lc
+        from pylinks.core import log as _log
+        report = getattr(self, "_links_report", None) or {}
+        done, m3u_done, failed, pairs = 0, 0, [], []
+        import pythoncom  # type: ignore
+        import win32com.client  # type: ignore
+        pythoncom.CoInitialize()
+        try:
+            sh = win32com.client.Dispatch("WScript.Shell")
+            for f in files or []:
+                it = report.get(f)
+                if not it:
+                    failed.append({"file": Path(f).name, "reason": "brak w raporcie"})
+                    continue
+                try:
+                    changed, pp = _lc.fix_link(sh, it)
+                    if changed:
+                        done += 1
+                        pairs += [list(x) for x in pp]
+                        for old, new in pp:
+                            _log.write("links", f"skrót {Path(f).name}: {old} -> {new}")
+                    if fix_m3u:
+                        for iss in it["issues"]:
+                            if iss.get("kind") == "m3u" and _lc.fix_m3u(iss):
+                                m3u_done += 1
+                                _log.write("links", f"m3u {iss['raw']}: "
+                                           + "; ".join(f"{e['old']} -> {e['new']}"
+                                                       for e in iss["entries"]))
+                except Exception as ex:
+                    failed.append({"file": Path(f).name, "reason": str(ex)})
+            del sh                   # zwolnij COM PRZED CoUninitialize
+        finally:
+            pythoncom.CoUninitialize()
+        _ICON_URI_CACHE.clear()
+        return {"ok": True, "done": done, "m3u": m3u_done, "failed": failed,
+                "pairs": pairs}
+
+    def links_fix_steam(self, pairs: list) -> dict:
+        """Te same podmiany ścieżek we wpisach Steama (wymaga zamkniętego Steama)."""
+        from pylinks.services import steam_export as _se
+        from pylinks.core import log as _log
+        cd = self._steam_config_dir()
+        if not cd:
+            return {"ok": False, "reason": "nie znaleziono userdata Steam"}
+        vdf = cd / "shortcuts.vdf"
+        if not vdf.is_file():
+            return {"ok": True, "changed": 0}
+        if _se.is_steam_running():
+            return {"ok": False, "reason": "zamknij Steam, żeby poprawić wpisy"}
+        n = _se.update_launch_paths(vdf, [tuple(p) for p in pairs or []])
+        _log.write("steam", f"poprawiono ścieżki ROM w {n} wpisach")
+        return {"ok": True, "changed": n}
+
     def _mame_shortcut_games(self) -> list:
         """Gry MAME ze skrótów w LINKS/MAME, z kluczem liczonym jak w PyLinksDeck.
 
@@ -1115,6 +1211,48 @@ class Api:
         res["links_dir"] = str(LINKS_DIR)
         return res
 
+    def _shortcut_sets(self, d: Path) -> dict:
+        """{ścieżka skrótu: nazwa zestawu z jego argumentów} dla katalogu.
+
+        Skróty arcade nazywają się TYTUŁEM („Alien vs. Predator.lnk"), a zestaw
+        („avspu") siedzi w argumentach. Bez tego porównanie po nazwie pliku nie
+        ma szans, gdy ta sama platforma jest też zwykłym systemem ROM (katalog
+        z plikami `<set>.zip`) — wszystkie skróty wychodziły wtedy jako sieroty.
+        """
+        out: dict = {}
+        try:
+            files = [f for f in d.iterdir() if f.suffix.lower() in _LINK_EXTS]
+        except OSError:
+            return out
+        # COM inicjalizuje sam `_lnk_set` — zagnieżdżanie kończyło się ostrzeżeniem
+        # „Win32 exception releasing IUnknown" przy wychodzeniu z apartamentu.
+        for f in files:
+            try:
+                out[str(f)] = (self._lnk_set(f) or "").strip().lower()
+            except Exception:
+                out[str(f)] = ""
+        return out
+
+    def _arcade_sets(self) -> set:
+        """Zestawy, które REALNIE mamy: katalog do grania, biblioteka, skan arcade.
+
+        Liczone na bieżąco (to listing dwóch katalogów) — biblioteka arcade bywa
+        pusta zaraz po starcie programu, zanim zrobisz skan, a sieroty sprawdza
+        się wcześniej."""
+        from pylinks.services import mame as _m
+        a = (_load_config().get("arcade_library", {}) or {})
+        sets = set()
+        for d in (a.get("roms_dir", ""), a.get("lib_dir", "")):
+            if d:
+                sets |= {x.lower() for x in _m.scan_library(d)}
+        for g in self._mame_games:
+            if g.get("set"):
+                sets.add(str(g["set"]).lower())
+            for v in g.get("variants", []) or ():
+                if v.get("name"):
+                    sets.add(str(v["name"]).lower())
+        return sets
+
     def find_orphans(self) -> dict:
         """Skróty w LINKS/<platforma>/ bez odpowiadającej (zeskanowanej) gry.
 
@@ -1135,10 +1273,20 @@ class Api:
             names = expected.get(d.name)
             if names is None:
                 continue                     # tej platformy nie skanowaliśmy — pomiń
-            for f in sorted(d.iterdir()):
-                # stem bywa z doklejoną spacją (sortowanie serii) — porównujemy bez niej
-                if f.suffix.lower() in _LINK_EXTS and f.stem.rstrip() not in names:
-                    orphans.append({"name": f.stem, "platform": d.name, "path": str(f)})
+            kandydaci = [f for f in sorted(d.iterdir())
+                         # stem bywa z doklejoną spacją (sortowanie serii)
+                         if f.suffix.lower() in _LINK_EXTS and f.stem.rstrip() not in names]
+            if not kandydaci:
+                continue
+            # Zanim uznamy skrót za sierotę, sprawdzamy ZESTAW z jego argumentów:
+            # skróty arcade mają tytuł w nazwie pliku, a set („avspu") w argumentach.
+            sets = self._shortcut_sets(d)
+            znane = {n.lower() for n in names} | self._arcade_sets()
+            for f in kandydaci:
+                st = sets.get(str(f), "")
+                if st and st in znane:
+                    continue
+                orphans.append({"name": f.stem, "platform": d.name, "path": str(f)})
         # Wpisy w bibliotece Steam nie znikają razem ze skrótem — trzeba je wskazać
         # osobno, inaczej po usunięciu gry z dysku zostaje martwa pozycja w Steamie.
         return {"orphans": orphans, "steam": self._steam_orphans(orphans)}
@@ -1260,13 +1408,21 @@ class Api:
                           if f.suffix.lower() in _LINK_EXTS}
             except OSError:
                 pass
+        # zestawy, do których celują ISTNIEJĄCE skróty (arcade: tytuł w nazwie
+        # pliku, set w argumentach) — inaczej każdy `<set>.zip` wychodziłby jako brak
+        maj_set: dict = {}
         out = []
         for g in games:
             plat = g.get("system", "") if g.get("source") == "rom" else "PC"
             d = LINKS_DIR / plat
             stem = sortable_stem(safe_name(g.get("name", "") or "gra"), sibs[plat])
-            if not any((d / (stem + ext)).exists() for ext in _LINK_EXTS):
-                out.append(_game_key(g))
+            if any((d / (stem + ext)).exists() for ext in _LINK_EXTS):
+                continue
+            if plat not in maj_set:
+                maj_set[plat] = {v for v in self._shortcut_sets(d).values() if v}
+            if (g.get("name", "") or "").strip().lower() in maj_set[plat]:
+                continue
+            out.append(_game_key(g))
         return out
 
     # --- grafiki: dwa tryby "icon" (kwadrat) / "steam" (portret) ---

@@ -404,6 +404,38 @@ def remove_shortcuts(vdf_path: Path, appids) -> int:
     return n
 
 
+def update_launch_paths(vdf_path: Path, pairs) -> int:
+    """Podmienia ścieżki plików w `LaunchOptions` wpisów „Non-Steam".
+
+    Po konwersji ROM-u (cue → chd) wpis w Steamie ma starą ścieżkę tak samo jak
+    skrót. appid liczy się z emulatora i nazwy, nie z pliku ROM, więc wpis
+    zostaje TEN SAM — grafiki i kolekcje nie giną. Ścieżkę dopasowujemy w obu
+    zapisach separatorów. Zwraca liczbę zmienionych wpisów."""
+    pairs = [(o, n) for o, n in (pairs or []) if o and n and o != n]
+    if not pairs:
+        return 0
+    entries = read_shortcuts_vdf(vdf_path)
+    changed = 0
+    for e in entries:
+        lo = e.get("LaunchOptions") or ""
+        new_lo = lo
+        for old, new in pairs:
+            for a, b in ((old, new), (old.replace(_BS, "/"), new.replace(_BS, "/"))):
+                if a in new_lo:
+                    new_lo = new_lo.replace(a, b)
+        if new_lo != lo:
+            e["LaunchOptions"] = new_lo
+            changed += 1
+    if not changed:
+        return 0
+    shutil.copy2(vdf_path, vdf_path.with_name(
+        f"shortcuts.vdf.bak-{datetime.now():%Y%m%d-%H%M%S}"))
+    tmp = vdf_path.with_name(f"shortcuts.tmp-{uuid.uuid4().hex}.vdf")
+    tmp.write_bytes(write_shortcuts_vdf(entries))
+    os.replace(tmp, vdf_path)
+    return changed
+
+
 def write_collections(config_dir: Path, tag_appids: dict) -> dict:
     cs = Path(config_dir) / "cloudstorage"
     ns1 = cs / "cloud-storage-namespace-1.json"

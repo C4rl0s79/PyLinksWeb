@@ -3,6 +3,47 @@
 Wszystkie istotne zmiany w PyLinksWeb. Format oparty na
 [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/).
 
+## [9.22.1] — 2026-09-21
+
+### Naprawione
+- **Skróty arcade zgłaszane do usunięcia („brak gier").** Gdy MAME jest też
+  zwykłym systemem ROM (katalog `D:\emu\roms\Mame`), skan widzi tam gry
+  o nazwach ZESTAWÓW (`avspu`, `asterix`), a skróty nazywają się TYTUŁAMI
+  („Alien vs. Predator”). Sieroty sprawdzały tylko nazwę pliku, więc po starcie
+  programu i odświeżeniu WSZYSTKIE skróty MAME (39 z 39) wychodziły jako
+  osierocone, razem z propozycją skasowania ikon. Teraz, zanim skrót zostanie
+  uznany za sierotę, sprawdzany jest ZESTAW z jego argumentów
+  (`-rompath "…" avspu`) — wobec gier ze skanu, katalogu do grania, biblioteki
+  arcade i wyniku skanu arcade. Zestawy są liczone na bieżąco, więc działa to
+  też zaraz po starcie, zanim zrobisz skan arcade.
+- Ta sama zasada w „brakujących skrótach": zestaw, który ma już skrót pod
+  tytułem, nie jest zgłaszany jako brak (było 88 z 88, jest 49 faktycznych).
+
+## [9.22.0] — 2026-09-15
+
+### Dodane
+- **🩺 Sprawdź skróty** — znajduje skróty, których plik ROM już nie istnieje, i
+  podmienia ścieżkę na nowy plik. Po konwersji kolekcji (bin/cue/iso → CHD,
+  7z → ZIP) gra ma tę samą nazwę, więc nie wychodziła ani jako sierota, ani jako
+  brak, a skrót dalej wskazywał stary plik i gra się nie uruchamiała. Sprawdzenie
+  idzie od strony SKRÓTÓW (wszystkie `.lnk` w LINKS, także Kolekcje), bez
+  skanowania biblioteki ROM-ów; istnienie plików liczone listą katalogu (jedno
+  zapytanie na katalog), więc 666 skrótów to kilka sekund.
+  - zamiennik = plik o tej samej nazwie w tym samym katalogu, preferencja
+    `.chd` → `.m3u` → `.zip` → `.7z` → `.rvz` → `.iso` → …,
+  - w skrócie zmienia się tylko ścieżka pliku — emulator, argumenty, ikona
+    i katalog roboczy zostają,
+  - `.m3u` z wpisami na nieistniejące pliki są poprawiane na zamienniki
+    (opcja; dla gier wielopłytowych),
+  - wpisy „Non-Steam" dostają te same podmiany w opcjach uruchomienia — appid
+    liczy się z emulatora i nazwy, więc wpis, grafiki i kolekcje zostają
+    (kopia `shortcuts.vdf.bak-…`, Steam musi być zamknięty),
+  - ostrzeżenie, gdy emulator nie czyta nowego formatu (rdzeń RetroArch wg
+    `info/*.info`, Dolphin/xemu/RPCS3/Cemu bez CHD) — takie pozycje nie są
+    zaznaczane domyślnie,
+  - skróty bez zamiennika (brak pliku, katalog nie istnieje) są wypisane osobno
+    do ręcznego sprawdzenia. Każda zmiana trafia do dziennika.
+
 ## [9.21.3] — 2026-09-15
 
 ### Naprawione

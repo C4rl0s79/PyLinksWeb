@@ -247,6 +247,113 @@ function renderSteamGroups(){
   }
 }
 el("btnSteamGroups").onclick = openSteamGroups;
+
+// ── Sprawdzenie skrótów: pliki ROM, których już nie ma (po konwersji) ──────────
+let LC = [];
+function lcEsc(t){ const d = document.createElement("span"); d.textContent = t; return d.innerHTML; }
+function lcName(p){ return String(p || "").split(/[\\/]/).pop(); }
+async function openLinkCheck(){
+  el("lcModal").hidden = false;
+  el("lcList").innerHTML = "";
+  el("lcInfo").textContent = "";
+  el("lcFix").disabled = true;
+  el("lcMsg").textContent = "Sprawdzam skróty…";
+  let r;
+  try{ r = await api("links_check"); }
+  catch(e){ el("lcMsg").textContent = "✗ " + e.message; return; }
+  if (!r.started){ el("lcMsg").textContent = "✗ " + (r.reason || "nie uruchomiono"); return; }
+  const t = setInterval(async () => {
+    let st;
+    try{ st = await api("job_status"); }catch(_){ return; }
+    if (st.running){
+      el("lcMsg").textContent = st.total ? `${st.current} (${st.done}/${st.total})`
+                                         : (st.current || "Sprawdzam…");
+      return;
+    }
+    clearInterval(t);
+    const res = st.result || {};
+    if (res.error){ el("lcMsg").textContent = "✗ " + res.error; return; }
+    LC = res.items || [];
+    el("lcInfo").textContent = `${res.checked || 0} skrótów • ${res.ok || 0} w porządku`
+      + ` • ${LC.length} z problemem • ${res.fixable || 0} do naprawy`;
+    el("lcMsg").textContent = LC.length ? "" : "✓ Wszystkie skróty wskazują istniejące pliki.";
+    renderLinkCheck();
+  }, 400);
+}
+function renderLinkCheck(){
+  const box = el("lcList"); box.innerHTML = "";
+  const fix = LC.filter(it => it.issues.some(i => i.fixable));
+  const bad = LC.filter(it => !it.issues.some(i => i.fixable));
+  const head = (txt) => { const h = document.createElement("div");
+    h.className = "cat-row top"; h.textContent = txt; box.appendChild(h); };
+  if (fix.length) head(`Do naprawy (${fix.length})`);
+  for (const it of fix){
+    const row = document.createElement("label");
+    row.className = "cat-row";
+    const opisy = it.issues.map(i => {
+      if (i.kind === "m3u"){
+        const n = i.entries.length;
+        return `<span class="n">M3U: ${n} wpis${n === 1 ? "" : "y"} → ${lcEsc(i.entries.map(e => e.new || "?").join(", "))}</span>`;
+      }
+      if (!i.fixable) return `<span class="mat">${lcEsc(lcName(i.raw))}: ${lcEsc(i.warn || "brak")}</span>`;
+      return `<span class="n">${lcEsc(lcName(i.raw))} → <b>${lcEsc(lcName(i.new_raw))}</b></span>`
+           + (i.warn ? `<span class="mat">⚠ ${lcEsc(i.warn)}</span>` : "");
+    }).join("");
+    // z ostrzeżeniem (emulator może nie czytać formatu) — domyślnie NIE zaznaczony
+    const warn = it.issues.some(i => i.warn && i.fixable);
+    row.innerHTML = `<input type="checkbox" data-f="${lcEsc(it.file)}" ${warn ? "" : "checked"}>`
+      + `<span>${lcEsc(it.name)}</span><span class="n">${lcEsc(it.platform)}</span>` + opisy;
+    box.appendChild(row);
+  }
+  if (bad.length) head(`Bez zamiennika — trzeba sprawdzić ręcznie (${bad.length})`);
+  for (const it of bad){
+    const row = document.createElement("div");
+    row.className = "cat-row";
+    row.innerHTML = `<span>${lcEsc(it.name)}</span><span class="n">${lcEsc(it.platform)}</span>`
+      + it.issues.map(i => `<span class="mat">${lcEsc(lcName(i.raw))}: ${lcEsc(i.warn || (i.kind === "m3u" ? "wpisy .m3u bez pliku" : "brak"))}</span>`).join("");
+    box.appendChild(row);
+  }
+  el("lcFix").disabled = !fix.length;
+}
+el("btnLinkCheck").onclick = openLinkCheck;
+el("lcClose").onclick = () => { el("lcModal").hidden = true; };
+bindBackdropClose("lcModal", () => { el("lcModal").hidden = true; });
+el("lcAll").onclick = () => el("lcList").querySelectorAll("input[data-f]").forEach(c => c.checked = true);
+el("lcNone").onclick = () => el("lcList").querySelectorAll("input[data-f]").forEach(c => c.checked = false);
+el("lcFix").onclick = async () => {
+  const files = [...el("lcList").querySelectorAll("input[data-f]:checked")].map(c => c.dataset.f);
+  if (!files.length){ el("lcMsg").textContent = "Nic nie zaznaczono."; return; }
+  const m3u = el("lcM3u").checked, steam = el("lcSteam").checked;
+  if (!confirm(`Poprawić ${files.length} skrótów?`
+             + (m3u ? "\nPliki .m3u z brakującymi wpisami też zostaną poprawione." : "")
+             + (steam ? "\nWpisy w Steam dostaną nowe ścieżki (Steam musi być zamknięty)." : ""))) return;
+  el("lcFix").disabled = true;
+  let done = 0, m3uN = 0; const failed = [], pairs = [];
+  const STEP = 20;                      // paczkami — most jest synchroniczny
+  for (let i = 0; i < files.length; i += STEP){
+    el("lcMsg").textContent = `Naprawiam… ${Math.min(i + STEP, files.length)}/${files.length}`;
+    try{
+      const r = await api("links_fix", files.slice(i, i + STEP), m3u);
+      done += r.done || 0; m3uN += r.m3u || 0;
+      (r.failed || []).forEach(x => failed.push(x));
+      (r.pairs || []).forEach(p => pairs.push(p));
+    }catch(e){ failed.push({file: "?", reason: e.message}); }
+    await new Promise(r => setTimeout(r, 0));
+  }
+  let msg = `Poprawiono ${done} skrótów` + (m3u ? `, ${m3uN} plików .m3u` : "") + ".";
+  if (steam && pairs.length){
+    try{
+      const s = await api("links_fix_steam", pairs);
+      msg += s.ok ? ` Steam: ${s.changed} wpisów.` : ` Steam: ✗ ${s.reason}.`;
+    }catch(e){ msg += ` Steam: ✗ ${e.message}.`; }
+  }
+  if (failed.length){
+    msg += `\n\nNie udało się (${failed.length}):\n`
+         + failed.slice(0, 10).map(x => `• ${x.file}: ${x.reason}`).join("\n");
+  }
+  alert(msg);
+  openLinkCheck();                      // odśwież listę po naprawie
+};
 el("sgClose").onclick = () => { el("sgModal").hidden = true; };
 bindBackdropClose("sgModal", () => { el("sgModal").hidden = true; });
 

@@ -26,6 +26,7 @@
       <button class="btn ghost" id="btnPing" title="Test mostu Python↔JS">⚡ Test mostu</button>
       <button class="btn ghost" id="btnColl">📁 Kolekcje</button>
       <button class="btn ghost" id="btnSteamGroups" title="Zarządzaj grupami (kolekcjami) w bibliotece Steam">🎮 Grupy Steam</button>
+      <button class="btn ghost" id="btnLinkCheck" title="Znajduje skróty, których plik ROM już nie istnieje (np. po konwersji na CHD/ZIP), i podmienia ścieżkę na nowy plik">🩺 Sprawdź skróty</button>
       <button class="btn ghost" id="btnConsole" title="Konsola / dziennik zdarzeń (F12)">≡ Konsola</button>
       <button class="btn ghost" id="btnSettings">⚙ Ustawienia</button>
     </div>
@@ -68,6 +69,31 @@
         <span style="flex:1"></span>
         <label class="chk mini"><input id="sgDrop" type="checkbox" checked> usuń też pozycje z biblioteki</label>
         <button class="btn" id="sgDel">Usuń zaznaczone</button>
+      </div>
+    </div>
+  </div>
+  <!-- Skróty wskazujące nieistniejące pliki ROM (po konwersji kolekcji) -->
+  <div id="lcModal" class="modal" hidden>
+    <div class="modal-box cat-box">
+      <div class="modal-head">
+        <b>Sprawdzenie skrótów</b>
+        <span id="lcInfo" class="muted"></span>
+        <span style="flex:1"></span>
+        <button class="btn ghost mini" id="lcAll">Wszystkie</button>
+        <button class="btn ghost mini" id="lcNone">Żadne</button>
+        <button class="btn ghost mini" id="lcClose">✕</button>
+      </div>
+      <div class="cat-hint muted">Skróty, których plik ROM zniknął. Gdy obok leży plik
+        o tej samej nazwie w innym formacie (np. <code>.cue</code> → <code>.chd</code>,
+        <code>.7z</code> → <code>.zip</code>), ścieżka zostanie podmieniona — ikony,
+        emulator i argumenty zostają.</div>
+      <div id="lcList" class="cat-tree"></div>
+      <div class="modal-foot">
+        <span id="lcMsg" class="muted"></span>
+        <span style="flex:1"></span>
+        <label class="chk mini"><input id="lcM3u" type="checkbox" checked> popraw .m3u</label>
+        <label class="chk mini"><input id="lcSteam" type="checkbox" checked> popraw wpisy w Steam</label>
+        <button class="btn" id="lcFix">Napraw zaznaczone</button>
       </div>
     </div>
   </div>
