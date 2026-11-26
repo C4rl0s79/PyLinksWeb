@@ -99,11 +99,21 @@ def _default_config() -> dict:
             "support_dir": "",   # catver.ini / mature.ini (gatunki i „mature")
         },
         "last_run_errors": {},
+        # jak uruchamiać gry PC: "normal" (wprost) albo "specialk" (przez SKIF)
+        "pc_launch_mode": "normal",
+        "specialk_exe": "",
+        # gry WYŁĄCZONE z Special K (klucze) — np. sieciowe z anty-cheatem
+        "specialk_skip": [],
         "extra_sources": {
             # maks. grafik z KAŻDEGO źródła bez stronicowania (IGDB/TGDB)
             "max_per_source": 12,
             "steam_cdn":            True,
             "libretro":             True,
+            "launchbox":            True,
+            "emumovies":            False,
+            "em_host":              "ftp.emumovies.com",
+            "em_user":              "",
+            "em_pass":              "",
             "igdb":                 False,
             "igdb_client_id":       "",
             "igdb_client_secret":   "",

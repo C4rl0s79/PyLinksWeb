@@ -3,6 +3,217 @@
 Wszystkie istotne zmiany w PyLinksWeb. Format oparty na
 [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/).
 
+## [9.26.3] — 2026-11-26
+
+### Plan: skróty bez ikon po skasowaniu okładek z cache
+Objaw: „Utwórz skróty" → „103 bez ikony — brak okładki", choć siatka pokazuje
+okładki; PyLinksDeck rysuje puste kafle (czyta `Cache\covers\icon`).
+Przyczyna: po skasowaniu `covers\icon` zostały miniatury w `thumbs\icon`.
+`thumb_path()` zwraca miniaturę bez sprawdzenia, czy istnieje okładka, więc
+`covers_fetch_batch()` uznawał ją za obecną i nic nie pobierał
+(`do_pobrania=0`), a `export_games()` nie ma z czego upiec .ico.
+
+Co się zmienia:
+- `art.thumb_path()` — miniatura ważna tylko, gdy istnieje okładka; osierocona
+  jest kasowana (dotyczy też serwera miniatur i `thumb_uri`).
+- `covers_fetch_batch()` — o tym, czy pobierać, decyduje obecność OKŁADKI
+  (`has_cover`), nie miniatury ani pamięci RAM.
+- `export_games()` i `export_to_steam()` — przed pieczeniem ikon dociągają
+  brakujące okładki (zapisany wybór → ta sama droga co siatka), równolegle.
+  Wywołują to wszystkie miejsca tworzenia skrótów (Utwórz skróty, eksport
+  zaznaczonych, tryb Special K i wyjątek dla gry, biblioteka Steam).
+
+Czego NIE dotyka: format skrótów, kadr/grzbiet, eksport arcade i „Napraw
+ikony" (już dociągają okładkę), PyLinksDeck, pamięć nietrafień.
+
+### Naprawione
+- **Skróty bez ikon i puste kafle w PyLinksDeck po skasowaniu okładek.**
+  Tworzenie skrótów (także eksport do biblioteki Steam) samo dociąga brakujące
+  okładki — najpierw ZAPISANY wybór grafiki, równolegle, przed pieczeniem ikon.
+  Siatka nie udaje już, że okładka jest, gdy została po niej sama miniatura,
+  więc brakujące okładki pobiera też zwykłe wejście w widok. Pobrane okładki
+  trafiają do `Cache\covers\icon`, skąd czyta je PyLinksDeck („Odśwież
+  bibliotekę" w Decku). Sprawdzone na zapisanych wyborach użytkownika: grafika
+  odtwarzana dokładnie ta wybrana (`restored`), ikona się piecze.
+
+## [9.26.2] — 2026-10-28
+
+### Naprawione
+- **„Grupy Steam" pokazywały 0 grup i 0 pozycji**, choć w Steamie były kolekcje
+  utworzone przez program. Steam zakłada profil anonimowy `userdata\\0` (przy
+  instalacji i przy logowaniu offline) — pusty, bez `shortcuts.vdf` i bez
+  kolekcji. Lista kont była sortowana po nazwie, więc „0" wychodziło pierwsze,
+  a program bierze pierwszy katalog z listy. Teraz konta są układane wg
+  zawartości: najpierw to z `shortcuts.vdf` i kolekcjami, potem ostatnio
+  używane, a pusty profil anonimowy na końcu.
+
+  Poprawka siedzi w jednym miejscu (`find_userdata_configs`), więc dotyczy
+  wszystkich trzech miejsc, które z niej korzystają: okna grup, eksportu do
+  biblioteki Steam i sprzątania „duchów". Ręcznie wskazany katalog
+  (`steam_userdata_dir` w ustawieniach) nadal ma pierwszeństwo.
+
+  Sprawdzone na koncie użytkownika: wybierane jest `userdata\\28406203`,
+  program widzi **38 grup i 243 pozycje** (wcześniej 0 i 0).
+
+## [9.26.1] — 2026-10-07
+
+### Dodane
+- **Wyjątek od Special K dla pojedynczej gry** — znacznik ⚡ na kafelku
+  (widok LINKS / PC, widoczny gdy tryb Special K jest włączony). Zaznaczony =
+  gra uruchamia się przez Special K, odznaczony = zwykły skrót. **Potrzebne
+  w grach sieciowych: anty-cheat traktuje wstrzykniętą bibliotekę jak
+  oszustwo.** Odznaczenie:
+  - od razu przebudowuje skrót tej gry (ikona, kadr i grzbiet bez zmian),
+  - jest TRWAŁE — obowiązuje też przy kolejnych eksportach skrótów i przy
+    ponownym przełączaniu trybu, bo lista wyjątków (`specialk_skip`) siedzi
+    w ustawieniach obok trybu,
+  - wyłączone gry nie są liczone jako „bez pliku wykonywalnego" i widać je
+    w pytaniu przed przełączeniem całej platformy.
+
+### Naprawione
+- **PyLinksDeck 0.6.3** rozpoznaje grę ze Steama uruchamianą przez Special K
+  (`SKIF_SteamAppId=<appid>`). Bez tego po przełączeniu trybu gry ze Steama
+  traciły w Decku okładki — klucz liczył się z nazwy zamiast z appid.
+
+## [9.26.0] — 2026-10-06
+
+### Dodane
+- **Przełącznik „⚡ Special K" dla platformy PC** (widok LINKS, przycisk widoczny
+  tylko przy PC). Jednym kliknięciem skróty gier PC przechodzą ze zwykłego
+  uruchamiania na uruchamianie przez Special K (SKIF) i z powrotem. Format
+  skrótu wzięty z prawdziwego skrótu zrobionego przez SKIF-a:
+
+      cel        C:\\Program Files\\Special K\\SKIF.exe
+      argumenty  "<plik gry>.exe" SKIF_SteamAppId=<appid>
+      katalog    <folder gry>
+
+  `SKIF_SteamAppId` dochodzi tylko dla gier ze Steama — dzięki temu Special K
+  widzi grę jako steamową. SKIF jest szukany w ustawieniu `specialk_exe`,
+  typowych lokalizacjach i w rejestrze.
+
+  - przełączenie PRZEBUDOWUJE skróty tą samą drogą co „Utwórz skróty", więc
+    ikony, kadrowanie i grzbiety zostają bez zmian,
+  - skrót z poprzedniego trybu w innym formacie (`steam://` jako `.url`
+    kontra SKIF jako `.lnk`) jest usuwany, żeby nie było dwóch wpisów na grę,
+  - gra, dla której nie wiadomo, który plik uruchomić, zostaje ze zwykłym
+    skrótem i jest wypisana przed przełączeniem,
+  - **ROM-y i eksport do biblioteki Steam działają bez zmian** — tryb dotyczy
+    wyłącznie skrótów gier PC.
+
+  **Wybór pliku gry** nie idzie już „po największym .exe": najpierw liczy się
+  zgodność z nazwą gry, potem typowe nazwy silników (`…-Win64-Shipping.exe`),
+  pomijane są katalogi z instalatorami bibliotek (`redist`, `DirectX`, `PhysX`,
+  `_CommonRedist`), a plik w korzeniu katalogu jest pewniejszy niż schowany
+  głęboko. Na bibliotece użytkownika (81 gier): 79 dostaje poprawny plik —
+  3DMark `3DMark.exe` (nie `3DMarkCPUProfile.exe`), Batman `ShippingPC-BmGame.exe`
+  (nie instalator PhysX), Persona 3 `P3R.exe`, Expedition 33 `SandFall-Win64-Shipping.exe`.
+  Zły wybór poprawia się ręcznym wskazaniem pliku dla danej gry.
+
+## [9.25.2] — 2026-10-05
+
+### Naprawione
+- **EmuMovies: „[Errno 10054] połączenie zamknięte przez zdalnego hosta"** przy
+  budowaniu spisu. Serwer rozłącza długie sesje, a spis kilkunastu platform to
+  setki operacji — jedno zerwanie kończyło całe zadanie. Połączenie wstaje teraz
+  samo: każda operacja (listowanie, odczyt fragmentu paczki) jest ponawiana na
+  świeżym połączeniu, do trzech razy, z odstępem. Czytanie paczki od wskazanego
+  bajtu jest bezstanowe, więc wznowienie niczego nie psuje. Paczka, której mimo
+  to nie da się odczytać, trafia na listę pominiętych — spis idzie dalej.
+- **Platformy, których EmuMovies nie nazywa po swojemu**, nie miały katalogu:
+  MD, NAOMI, NAOMI2 i PSP. Serwer łączy pokrewne platformy w jeden katalog
+  („Sega Genesis - Mega Drive", „Sega Naomi - Naomi 2") albo nazywa je inaczej
+  („Sony Playstation Portable"). Dopasowanie bierze teraz pod uwagę nazwę
+  wprost, nazwę z LaunchBoksa, wypisane aliasy i katalog zaczynający się od
+  naszej nazwy.
+
+  Spis całej biblioteki użytkownika (21 platform): **186 794 grafiki z 243 paczek
+  ZIP**, baza 90,9 MB, bez jednego błędu odczytu. Pominięte zostają tylko paczki
+  RAR/7z (245) — tych nie da się czytać bez ściągnięcia całości.
+
+## [9.25.1] — 2026-10-05
+
+### Naprawione
+- **„Pobierz / odśwież bazę LaunchBox" kończyło się błędem** „WinError 32 — proces
+  nie może uzyskać dostępu do pliku, ponieważ jest on używany przez inny proces:
+  `Cache\\launchbox_metadata.zip`". Rozbiór archiwum nie zamykał ani paczki, ani
+  bazy, więc Windows trzymał plik zablokowany: sprzątanie po rozbiorze nie mogło
+  go skasować, a przy kolejnej próbie błąd wracał już przy pobieraniu (nie dało
+  się nadpisać zablokowanego pliku). Teraz paczka i baza zamykają się zawsze,
+  pobranie najpierw usuwa resztkę po przerwanej próbie, a nieudane sprzątanie
+  nie przerywa zadania — plik i tak zostanie nadpisany przy następnym pobraniu.
+  Indeks budował się poprawnie, blokada dotyczyła tylko pliku tymczasowego.
+
+## [9.25.0] — 2026-10-05
+
+### Zmienione
+- **EmuMovies: obsługa taka, jak serwer naprawdę wygląda** (poprawka do 9.24.0,
+  sprawdzona na żywym koncie). Trzy rzeczy były inne, niż zakładała pierwsza wersja:
+  - host to **files2.emumovies.com** i wymaga **FTPS** (stary wpis
+    `ftp.emumovies.com` w ustawieniach jest automatycznie zamieniany),
+  - serwer nie zna `MLSD`, a listing jest w formacie IIS — własny rozbiór obu formatów,
+  - biblioteka to **PACZKI** (`/Official/<kategoria>/<system>/<system> (Boxes-Spines)…zip`),
+    a nie pojedyncze pliki; pojedyncza paczka ma setki MB, komplet dla jednej
+    platformy — kilkanaście GB.
+
+  **Paczek nie pobieramy.** ZIP trzyma spis treści na końcu pliku, a FTP potrafi
+  czytać od wskazanego bajtu, więc paczka jest otwierana jak plik z dostępem
+  swobodnym: spis 4812 grafik czyta się w ~0,7 s (3 odczyty), a pojedyncza
+  okładka w ~0,4 s. Pobrane grafiki lądują w `Cache/emumovies`.
+
+  Zmierzone na koncie użytkownika: spis PS1 + MAME + Dreamcast = **45 102 grafiki
+  z 58 paczek w 25 s**, baza 18,8 MB. Rodzaje: Boxes-Spines, Snaps-Title,
+  Snaps-Gameplay, Custom Marquees, Game Over Snaps, Artwork Preview, Boxes-Back…
+  Automaty dopasowują się po nazwie zestawu (`avspu`), reszta po tytule.
+
+  Paczki **RAR/7z (wieloczęściowe) są pomijane** — tych nie da się czytać bez
+  ściągnięcia całości. Są wypisywane po spisie, żeby było wiadomo, czego brakuje
+  (u użytkownika 123 paczki, głównie duże zestawy pudełek 2D/3D).
+
+## [9.24.0] — 2026-10-05
+
+### Dodane
+- **EmuMovies jako źródło grafik** (konto abonenta, Ustawienia → Źródła dodatkowe).
+  EmuMovies nie ma publicznego API — `api.emumovies.com` nie istnieje w DNS —
+  więc dostęp idzie przez FTP abonenta. Login i hasło wpisujesz w Ustawieniach,
+  hasło jest szyfrowane DPAPI jak pozostałe sekrety; puste pole = zostaw stare.
+  - **Sprawdź połączenie** — loguje się i pokazuje, ile katalogów widać na serwerze,
+  - **Zbuduj spis dla moich platform** — jedno logowanie, obchód katalogów
+    systemów i rodzajów grafik, spis do `Cache/emumovies.db` (FTP jest wolny,
+    więc listujemy raz; przy szukaniu okładek nie ma już ruchu po sieci),
+  - układ katalogów jest **odkrywany**, nie zgadywany: katalogi najwyższego
+    poziomu = systemy (dopasowanie po nazwie, także przez nazwy LaunchBoksa),
+    w środku rodzaje grafik; platformy bez katalogu są wypisane po spisie,
+  - automaty dopasowywane też po nazwie zestawu (`avspu`),
+  - grafiki pokazywane w siatce przez lokalny serwer miniatur (okno nie otworzy
+    adresu `ftp://`): plik pobiera się raz i zostaje w `Cache/emumovies`,
+  - kolejność rodzajów: box → cart → disc → logo → title → snap → marquee → …
+
+### Uwagi
+- Działanie z prawdziwym serwerem EmuMovies wymaga Twojego konta; testy
+  automatyczne używają atrapy FTP, więc sprawdź przyciskiem **Sprawdź połączenie**.
+
+## [9.23.0] — 2026-10-05
+
+### Dodane
+- **LaunchBox Games DB jako źródło grafik** (bez konta, Ustawienia → Źródła
+  dodatkowe). Baza pobiera się RAZ jednym plikiem (ok. 108 MB) i ląduje w Cache
+  jako indeks SQLite — 189 072 gier, 1 337 062 grafiki, 70 987 nazw
+  alternatywnych, ok. 148 MB. Przy szukaniu grafik nie ma żadnych zapytań do
+  sieci; pobierana jest dopiero wybrana grafika.
+  - **wszystkie typy**: Box - Front, Box - 3D, Clear Logo, **Box - Spine**
+    (gotowe grzbiety), Cart - Front, Disc, Screenshot, Fanart, Banner, marquee
+    i panele arcade — każdy podpisany typem i regionem,
+  - **automaty po nazwie zestawu**: `Mame.xml` tłumaczy `avspu` na tytuł
+    (z rodzicem klonu), więc biblioteka arcade też dostaje grafiki,
+  - działa dla ROM-ów, arcade i PC (platforma „Windows"),
+  - dopasowanie po nazwie i nazwach alternatywnych, odporne na zapis No-Intro
+    („Legend of Zelda, The - Ocarina of Time" = „The Legend of Zelda: Ocarina
+    of Time"), tagi regionów i interpunkcję.
+
+  Na bibliotece użytkownika (605 gier ROM/arcade): **586 gier (97%)** ma teraz
+  grafiki z tego źródła. Bez trafienia zostają zestawy BIOS/urządzeń MAME
+  (`alg_bios`, `jvs13551`), hacki i gry z japońskim tytułem.
+
 ## [9.22.1] — 2026-09-21
 
 ### Naprawione

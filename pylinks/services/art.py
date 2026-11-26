@@ -447,11 +447,18 @@ def thumb_path(cache_dir: Path, key: str, mode: str = "icon",
                box: int = THUMB_BOX):
     """Plik miniatury (tworzy przy pierwszym użyciu). Bez base64 — do serwera HTTP."""
     dst = _thumbs_dir(cache_dir, mode) / (_safe_key(key) + ".webp")
-    if dst.is_file():
-        return dst
     src = _raw_path(cache_dir, key, mode)
     if not src:
+        # Miniatura jest POCHODNĄ okładki. Bez okładki nie wolno jej podawać:
+        # po skasowaniu `covers\` siatka dalej pokazywała stare miniatury, więc
+        # nic nie dociągało okładek, a skróty i PyLinksDeck zostawały bez grafik.
+        try:
+            dst.unlink(missing_ok=True)
+        except OSError:
+            pass
         return None
+    if dst.is_file():
+        return dst
     if not PIL_OK:
         return src
     try:

@@ -93,6 +93,8 @@ async function showLinks(name, node){
   el("btnExport").hidden = true;    // LINKS = gotowe skróty, nie eksportujemy
   el("selbar").hidden = false;      // pasek trzyma „Napraw ikony"
   el("btnFixIcons").hidden = false;
+  // czekamy: dopiero stąd wiadomo, czy rysować na kafelkach znacznik Special K
+  await skShowButton(name === "PC");
   el("gridTitle").textContent = "LINKS / " + name;
   CURRENT_VIEW = {type: "link", filter: name};
   const grid = el("grid");
@@ -477,6 +479,7 @@ async function scanRomsUI(){
 
 function showRoms(system, node){
   el("btnFixIcons").hidden = true;
+  skShowButton(false);
   clearActive();
   if (!node) node = [...document.querySelectorAll("#romSystems .plat-item")]
     .find(b => b.querySelector("span") && b.querySelector("span").textContent === system);
@@ -538,6 +541,7 @@ function refreshView(){
 
 function renderPC(){
   el("btnFixIcons").hidden = true;
+  skShowButton(false);
   const grid = el("grid");
   let games = CUR_SRC ? PC_GAMES.filter(g => g.source === CUR_SRC) : PC_GAMES;
   games = applyFilter(games);
@@ -607,11 +611,23 @@ function card(name, sub, src, game){
     : `<span class="p">${sub}</span>`;
   c.innerHTML =
     `<div class="thumb">${hasKey ? '<span class="pick" title="Zaznacz do eksportu">✓</span>' : ''}` +
+    (hasKey && SK_CARDS
+      ? `<label class="skchk" title="Zaznaczone = gra uruchamia się przez Special K.\nOdznacz w grach sieciowych — anty-cheat uznaje wstrzykniętą bibliotekę za oszustwo.">`
+        + `<input type="checkbox" ${SK_SKIP.has(game.key) ? "" : "checked"}><span>\u26a1</span></label>`
+      : "") +
     `<span class="src src-${src}">${src}</span><span class="ph">🎮</span></div>
      <div class="cap"><span class="t" title="${name}">${name}</span>${subHtml}</div>`;
   if (hasKey){
     const pk = c.querySelector(".pick");
     if (pk) pk.onclick = (e) => { e.stopPropagation(); toggleSel(game.key, c); };
+    const sk = c.querySelector(".skchk");
+    if (sk){
+      sk.onclick = (e) => e.stopPropagation();          // nie otwieraj wyboru grafiki
+      sk.querySelector("input").onchange = (e) => {
+        e.stopPropagation();
+        setSpecialKForGame(game, !e.target.checked, e.target);
+      };
+    }
   }
   if (multi){
     const sel = c.querySelector(".ver-sel");
@@ -961,6 +977,7 @@ async function scanMameUI(){
 
 function showMame(genre, node){
   el("btnFixIcons").hidden = true;
+  skShowButton(false);
   clearActive(); LOAD_TOK++;
   if (node) node.classList.add("active");
   // Wejście w INNY gatunek zaczyna wybór od nowa, ale samo filtrowanie nazwą
@@ -1122,6 +1139,23 @@ el("ctxMenu").addEventListener("click", (e) => {
   else if (act === "ver") openVersions(g);                // wersja zestawu MAME
   else if (act === "exe") pickExe(g);                     // ręczny .exe
 });
+
+async function setSpecialKForGame(game, wylacz, box){
+  if (wylacz && !confirm(`Wy\u0142\u0105czy\u0107 Special K dla \u201e${game.name}"?\n\n`
+      + `Ta gra b\u0119dzie zawsze dostawa\u0107 ZWYK\u0141Y skr\u00f3t \u2014 tak\u017ce przy kolejnych eksportach.`)){
+    box.checked = true;
+    return;
+  }
+  setBusy("Przebudowuj\u0119 skr\u00f3t\u2026");
+  try{
+    const r = await api("specialk_set_game", game.key, wylacz);
+    if (wylacz) SK_SKIP.add(game.key); else SK_SKIP.delete(game.key);
+    if (r.reason) alert(r.reason);
+  }catch(e){
+    box.checked = !wylacz ? false : true;                // cofnij wizualnie
+    alert("B\u0142\u0105d: " + e.message);
+  }finally{ setBusy(""); }
+}
 
 async function pickExe(game){
   try{
@@ -1756,6 +1790,11 @@ async function openSettings(){
   el("s_gog").checked = cfg.scan_gog !== false;
   el("s_owned").checked = !!cfg.steam_include_owned;
   el("s_libretro").checked = (cfg.extra_sources || {}).libretro !== false;
+  el("s_launchbox").checked = (cfg.extra_sources || {}).launchbox !== false;
+  el("s_em").checked = !!(cfg.extra_sources || {}).emumovies;
+  el("s_emuser").value = (cfg.extra_sources || {}).em_user || "";
+  el("s_empass").value = (cfg.extra_sources || {}).em_pass || "";
+  lbShowStatus(); emShowStatus();
   el("s_spine").checked = !!cfg.icon_platform_spine;
   el("s_spineside").value = cfg.icon_spine_side || "left";
   el("s_logodir").value = cfg.platform_logo_dir || "";
@@ -1802,6 +1841,87 @@ async function openSettings(){
   el("setModal").hidden = false;
 }
 function closeSettings(){ el("setModal").hidden = true; }
+
+// ── LaunchBox Games DB: stan lokalnego indeksu + pobranie/odświeżenie ─────────
+async function lbShowStatus(){
+  let st;
+  try{ st = await api("launchbox_status"); }catch(e){ return; }
+  el("s_lbres").textContent = st && st.ready
+    ? `✓ ${st.games.toLocaleString("pl")} gier, ${st.images.toLocaleString("pl")} grafik `
+      + `(${st.size_mb} MB, z ${st.updated})`
+    : "baza nie pobrana";
+}
+// ── EmuMovies: test logowania + spis plików dla moich platform ───────────────
+async function emSaveCreds(){
+  // przyciski działają zanim klikniesz „Zapisz" — zapisujemy tylko pola EmuMovies
+  return api("save_config", {extra_sources: {emumovies: sc("s_em"),
+    em_user: sv("s_emuser"), em_pass: sv("s_empass")}});
+}
+async function emShowStatus(){
+  let st;
+  try{ st = await api("emumovies_status"); }catch(e){ return; }
+  el("s_emres").textContent = st && st.ready
+    ? `\u2713 ${st.files.toLocaleString("pl")} plik\u00f3w, ${st.systems.length} platform `
+      + `(${st.size_mb} MB, z ${st.updated})`
+    : "spis nie zbudowany";
+}
+el("s_emtest").onclick = async () => {
+  el("s_emres").textContent = "\u0141\u0105cz\u0119 si\u0119\u2026";
+  let r;
+  try{ await emSaveCreds(); }catch(e){}
+  try{ r = await api("emumovies_test"); }
+  catch(e){ el("s_emres").textContent = "\u2717 " + e.message; return; }
+  el("s_emres").textContent = r.ok
+    ? `\u2713 po\u0142\u0105czono \u2014 ${r.systems} katalog\u00f3w, np. ${(r.sample || []).slice(0, 4).join(", ")}`
+    : "\u2717 " + (r.reason || "b\u0142\u0105d logowania");
+};
+el("s_emindex").onclick = async () => {
+  const b = el("s_emindex"), old = b.textContent;
+  try{ await emSaveCreds(); }catch(e){}
+  b.disabled = true;
+  el("s_emres").textContent = "Spisuj\u0119\u2026";
+  let r;
+  try{ r = await api("emumovies_index", []); }
+  catch(e){ el("s_emres").textContent = "\u2717 " + e.message; b.disabled = false; return; }
+  if (!r.started){
+    el("s_emres").textContent = "\u2717 " + (r.reason || "nie uruchomiono");
+    b.disabled = false; return;
+  }
+  const t = setInterval(async () => {
+    let st;
+    try{ st = await api("job_status"); }catch(_){ return; }
+    if (st.running){ el("s_emres").textContent = st.current || "spisuj\u0119\u2026"; return; }
+    clearInterval(t);
+    b.disabled = false; b.textContent = old;
+    const res = st.result || {};
+    if (res.error){ el("s_emres").textContent = "\u2717 " + res.error; return; }
+    emShowStatus();
+    if ((res.skipped || []).length)
+      alert("Bez katalogu na FTP: " + res.skipped.join(", "));
+  }, 800);
+};
+el("s_lbupdate").onclick = async () => {
+  const b = el("s_lbupdate"), old = b.textContent;
+  b.disabled = true;
+  el("s_lbres").textContent = "Pobieram…";
+  let r;
+  try{ r = await api("launchbox_update"); }
+  catch(e){ el("s_lbres").textContent = "✗ " + e.message; b.disabled = false; return; }
+  if (!r.started){
+    el("s_lbres").textContent = "✗ " + (r.reason || "nie uruchomiono");
+    b.disabled = false; return;
+  }
+  const t = setInterval(async () => {
+    let st;
+    try{ st = await api("job_status"); }catch(_){ return; }
+    if (st.running){ el("s_lbres").textContent = st.current || "pracuję…"; return; }
+    clearInterval(t);
+    b.disabled = false; b.textContent = old;
+    const res = st.result || {};
+    if (res.error){ el("s_lbres").textContent = "✗ " + res.error; return; }
+    lbShowStatus();
+  }, 600);
+};
 
 // ── dodatkowe foldery Extra: lista z przyciskiem wyboru folderu ──────────────
 function renderExtraDirs(dirs){
@@ -2108,6 +2228,8 @@ el("setSave").onclick = async () => {
     icon_platform_spine: sc("s_spine"), icon_spine_side: el("s_spineside").value,
     platform_logo_dir: sv("s_logodir"),
     extra_sources: {steam_cdn: sc("s_steamcdn"), libretro: sc("s_libretro"),
+      launchbox: sc("s_launchbox"),
+      emumovies: sc("s_em"), em_user: sv("s_emuser"), em_pass: sv("s_empass"),
       igdb: sc("s_igdb"),
       igdb_client_id: sv("s_igdbid"), igdb_client_secret: sv("s_igdbsec"),
       tgdb: sc("s_tgdb"), tgdb_key: sv("s_tgdbkey"),
@@ -2536,6 +2658,81 @@ async function exportMameSelection(){
   }, 400);
 }
 
+
+// ── Special K: tryb uruchamiania gier PC (tylko platforma PC) ───────────────
+let SK_MODE = "normal";
+let SK_SKIP = new Set();      // klucze gier WYŁĄCZONYCH z Special K
+let SK_CARDS = false;         // czy rysować znacznik ⚡ na kafelkach (LINKS/PC)
+async function skShowButton(pokaz){
+  const b = el("btnSpecialK");
+  if (!b) return;
+  b.hidden = !pokaz;
+  if (!pokaz) return;
+  try{
+    const st = await api("specialk_status");
+    SK_MODE = st.mode || "normal";
+    SK_SKIP = new Set(st.skip_keys || []);
+    SK_CARDS = pokaz && SK_MODE === "specialk";
+    const wl = SK_MODE === "specialk";
+    b.textContent = wl ? "\u26a1 Special K: W\u0141\u0104CZONY" : "\u26a1 Special K: wy\u0142\u0105czony";
+    b.classList.toggle("on", wl);
+    b.title = st.ready
+      ? (wl ? "Skr\u00f3ty PC uruchamiaj\u0105 gry przez SKIF. Kliknij, aby wr\u00f3ci\u0107 do zwyk\u0142ych."
+            : "Kliknij, aby skr\u00f3ty PC uruchamia\u0142y gry przez Special K (SKIF): " + st.skif)
+      : "Nie znaleziono SKIF.exe \u2014 zainstaluj Special K albo wska\u017c plik w Ustawieniach";
+  }catch(e){ b.textContent = "\u26a1 Special K"; }
+}
+el("btnSpecialK").onclick = async () => {
+  const docelowy = SK_MODE === "specialk" ? "normal" : "specialk";
+  let st;
+  try{ st = await api("specialk_status"); }catch(e){ alert("B\u0142\u0105d: " + e.message); return; }
+  if (docelowy === "specialk" && !st.ready){
+    alert("Nie znalaz\u0142em SKIF.exe (Special K).\nZainstaluj Special K albo wska\u017c plik w Ustawieniach.");
+    return;
+  }
+  const bez = (st.without_exe || []);
+  let pyt = docelowy === "specialk"
+    ? `Prze\u0142\u0105czy\u0107 skr\u00f3ty ${st.games} gier PC na uruchamianie przez Special K?\n${st.skif}`
+    : `Wr\u00f3ci\u0107 do zwyk\u0142ych skr\u00f3t\u00f3w dla ${st.games} gier PC?`;
+  if (docelowy === "specialk" && bez.length)
+    pyt += `\n\nDla ${bez.length} gier nie wiadomo, kt\u00f3ry plik uruchomi\u0107 \u2014 zostan\u0105 ze zwyk\u0142ym skr\u00f3tem:\n`
+         + bez.slice(0, 8).join(", ") + (bez.length > 8 ? "\u2026" : "");
+  pyt += "\n\nIkony, kadr i grzbiety zostaj\u0105 bez zmian.";
+  if (!confirm(pyt)) return;
+  const b = el("btnSpecialK"), old = b.textContent;
+  b.disabled = true; b.textContent = "\u23f3 Przebudowuj\u0119\u2026";
+  let r;
+  try{ r = await api("specialk_set_mode", docelowy); }
+  catch(e){ alert("B\u0142\u0105d: " + e.message); b.disabled = false; b.textContent = old; return; }
+  if (!r.started){
+    alert("Nie uruchomiono: " + (r.reason || "?"));
+    b.disabled = false; b.textContent = old; return;
+  }
+  el("pfBar").hidden = false; el("pfFill").style.width = "0%";
+  PF_LABEL = docelowy === "specialk" ? "Special K" : "Zwyk\u0142e skr\u00f3ty";
+  if (PF_TIMER) clearInterval(PF_TIMER);
+  PF_TIMER = setInterval(async () => {
+    let s2;
+    try{ s2 = await api("job_status"); }catch(_){ return; }
+    const pct = s2.total ? Math.round(100 * s2.done / s2.total) : 0;
+    el("pfFill").style.width = pct + "%";
+    el("pfTxt").textContent = `${PF_LABEL}: ${s2.done}/${s2.total}`
+                            + (s2.current ? ` \u2014 ${s2.current}` : "");
+    if (s2.running) return;
+    clearInterval(PF_TIMER); PF_TIMER = null;
+    el("pfBar").hidden = true; b.disabled = false;
+    const res = s2.result || {};
+    if (res.error){ alert("B\u0142\u0105d: " + res.error); }
+    else {
+      let msg = `Przebudowano ${res.created || 0} skr\u00f3t\u00f3w PC.`;
+      if (res.removed) msg += `\nUsuni\u0119to ${res.removed} starych skr\u00f3t\u00f3w w innym formacie.`;
+      if ((res.failed || []).length) msg += `\nBez skr\u00f3tu: ${res.failed.length}.`;
+      alert(msg);
+    }
+    skShowButton(true);
+    if (CURRENT_VIEW && CURRENT_VIEW.type === "link") showLinks(CURRENT_VIEW.filter);
+  }, 400);
+};
 
 // Naprawa ikon istniejących skrótów: przepiecze je z bieżącej okładki i kadru.
 // Potrzebne, bo skrót zrobiony ZANIM gra dostała okładkę zostaje z gołą ikoną

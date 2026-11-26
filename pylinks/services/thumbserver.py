@@ -33,12 +33,46 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _emumovies(self, token: str):
+        """Plik z FTP EmuMovies: pobierany raz, potem prosto z cache.
+
+        Okno nie otworzy adresu ftp://, więc grafiki tego źródła idą przez nas.
+        Ścieżka zdalna jedzie w adresie zakodowana base64 — razem z tokenem
+        serwera nie da się tu podstawić czegokolwiek z zewnątrz."""
+        import base64
+        try:
+            remote = base64.urlsafe_b64decode(token.encode("ascii")).decode("utf-8")
+        except Exception:
+            return self._deny()
+        try:
+            from pylinks.api import _load_config
+            from pylinks.services import emumovies as _em
+            path = _em.fetch(_load_config(), _STATE["cache"], remote)
+        except Exception:
+            path = None
+        if not path or not path.is_file():
+            return self._deny()
+        try:
+            data = path.read_bytes()
+        except OSError:
+            return self._deny(500)
+        typy = {".png": "image/png", ".gif": "image/gif", ".webp": "image/webp",
+                ".bmp": "image/bmp"}
+        self.send_response(200)
+        self.send_header("Content-Type", typy.get(path.suffix.lower(), "image/jpeg"))
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_GET(self):
         parts = [p for p in urlparse(self.path).path.split("/") if p]
         # /t/<token>/<tryb>/<klucz>
         if len(parts) != 4 or parts[0] != "t" or parts[1] != _STATE["token"]:
             return self._deny(403)
         mode, key = parts[2], unquote(parts[3])
+        if mode == "em":
+            return self._emumovies(key)
         if mode not in ("icon", "steam"):
             return self._deny()
         from pylinks.services import art

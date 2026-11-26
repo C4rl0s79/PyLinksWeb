@@ -160,6 +160,8 @@
           <span id="selCount" class="muted"></span>
         </div>
         <button id="btnExport" class="btn" hidden>📦 Utwórz skróty</button>
+        <button id="btnSpecialK" class="btn ghost" hidden
+                title="Przełącza skróty gier PC między zwykłym uruchamianiem a uruchamianiem przez Special K (SKIF)">⚡ Special K</button>
         <button id="btnFixIcons" class="btn ghost" hidden
                 title="Przepiecze ikony istniejących skrótów — naprawia te bez ikony i te zrobione przed pobraniem okładki">🖼 Napraw ikony</button>
         <input id="filter" class="filter" type="search" placeholder="Filtruj po nazwie…" hidden>
@@ -284,6 +286,24 @@
           <h3>Źródła dodatkowe</h3>
           <label class="chk"><input id="s_steamcdn" type="checkbox"> Steam CDN (bez klucza)</label>
           <label class="chk"><input id="s_libretro" type="checkbox"> Libretro (box art dla ROM-ów, bez klucza)</label>
+          <label class="chk"><input id="s_launchbox" type="checkbox"> LaunchBox Games DB (bez konta — okładki, logo, grzbiety, kartridże, płyty, zrzuty; też dla automatów)</label>
+          <div class="inln"><button class="btn ghost" id="s_lbupdate">⬇ Pobierz / odśwież bazę LaunchBox</button>
+            <span id="s_lbres" class="muted"></span></div>
+          <div class="muted small">Baza (ok. 108 MB) pobiera się RAZ i siedzi w Cache jako
+            indeks; przy szukaniu grafik nie ma już żadnych zapytań do sieci — pobierana
+            jest dopiero wybrana grafika. Odśwież co jakiś czas, żeby mieć nowe pozycje.</div>
+          <label class="chk"><input id="s_em" type="checkbox"> EmuMovies (konto abonenta, FTP)</label>
+          <label>EmuMovies login <input id="s_emuser" type="text" autocomplete="off" spellcheck="false"></label>
+          <label>EmuMovies hasło <input id="s_empass" type="password" autocomplete="off" spellcheck="false"></label>
+          <div class="inln"><button class="btn ghost" id="s_emtest">Sprawdź połączenie</button>
+            <button class="btn ghost" id="s_emindex">📇 Zbuduj spis dla moich platform</button>
+            <span id="s_emres" class="muted"></span></div>
+          <div class="muted small">EmuMovies nie ma publicznego API — dostęp dla abonentów
+            idzie przez FTPS (files2.emumovies.com), a biblioteka jest tam w PACZKACH
+            (setki MB każda). Paczek nie pobieramy: ze spisu treści ZIP-a bierzemy
+            pojedynczą grafikę. Spis robimy raz, potem wszystko idzie z dysku.
+            Paczki RAR/7z (wieloczęściowe) są pomijane — tych nie da się czytać
+            bez ściągnięcia całości; po spisie wypiszemy, czego zabrakło.</div>
           <label class="chk"><input id="s_igdb" type="checkbox"> IGDB</label>
           <label>IGDB Client ID <input id="s_igdbid" type="password" autocomplete="off" spellcheck="false"></label>
           <label>IGDB Client Secret <input id="s_igdbsec" type="password" autocomplete="off" spellcheck="false"></label>
