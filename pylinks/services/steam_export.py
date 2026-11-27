@@ -86,8 +86,31 @@ def write_shortcuts_vdf(entries: list) -> bytes:
 
 
 # ── userdata / grid ────────────────────────────────────────────────────────
+def _userdata_rank(cfg_dir) -> tuple:
+    """Klucz sortowania kont Steam — najpierw to z PRAWDZIWYMI danymi.
+
+    `userdata\\0` to profil anonimowy (Steam zakłada go przy instalacji i przy
+    logowaniu offline): pusty, bez `shortcuts.vdf` i bez kolekcji. Sortowanie po
+    nazwie stawiało go na początku („0" < „28406203"), a wszystkie miejsca
+    w kodzie biorą pierwszy katalog z listy — więc program pokazywał 0 grup
+    i 0 pozycji, choć konto obok miało komplet.
+    """
+    ud = cfg_dir.parent
+    anonim = ud.name == "0"
+    skroty = (cfg_dir / "shortcuts.vdf").is_file()
+    kolekcje = (cfg_dir / "cloudstorage").is_dir()
+    czas = 0.0
+    for p in (cfg_dir / "shortcuts.vdf", cfg_dir / "localconfig.vdf", cfg_dir):
+        try:
+            czas = max(czas, p.stat().st_mtime)
+        except OSError:
+            pass
+    # mniejsze = wcześniej: nie-anonim, z danymi, ostatnio używane
+    return (anonim, not skroty, not kolekcje, -czas, str(cfg_dir).lower())
+
+
 def find_userdata_configs(steam_exe: str = "", override: str = "") -> list:
-    """Zwraca listę katalogów config (userdata\\<id>\\config) z shortcuts.vdf."""
+    """Katalogi config (userdata\\<id>\\config) — konto Z DANYMI na początku."""
     if override and Path(override).is_dir():
         return [Path(override)]
     bases = []
@@ -112,6 +135,7 @@ def find_userdata_configs(steam_exe: str = "", override: str = "") -> list:
                     if str(cfg).lower() not in seen:
                         seen.add(str(cfg).lower())
                         out.append(cfg)
+    out.sort(key=_userdata_rank)
     return out
 
 
@@ -620,7 +644,10 @@ def _collapse_twins(by_appid: dict) -> int:
     return removed
 
 
-def export_to_steam(cfg: dict, games: list, cache_dir: Path, progress=None) -> dict:
+def export_to_steam(cfg: dict, games: list, cache_dir: Path, progress=None,
+                    fetch_cover=None) -> dict:
+    """fetch_cover(key, game) -> bool [opcjonalne] — dociąga brakujące okładki
+    przed pieczeniem ikon wpisów (patrz `export.ensure_covers`)."""
     from pylinks.api import _game_key
     # Steam MUSI być zamknięty — inaczej przy wyjściu nadpisze shortcuts.vdf,
     # kolekcje i grafiki (nasze zapisy przepadną). Dawniej sprawdzaliśmy
@@ -652,6 +679,10 @@ def export_to_steam(cfg: dict, games: list, cache_dir: Path, progress=None) -> d
     spine_side = cfg.get("icon_spine_side", "left")
     icons_dir = Path(cache_dir) / "icons"
     icons_dir.mkdir(parents=True, exist_ok=True)
+
+    # Gry ze Steama i tak są pomijane (są już w bibliotece) — nie pobieramy im nic.
+    _exp.ensure_covers([g for g in games if g.get("source") != "steam"],
+                       cache_dir, fetch_cover)
 
     exe_over = cfg.get("exe_override", {}) or {}
     added, art_n, skipped = 0, 0, 0

@@ -297,9 +297,20 @@ def _gog_playtask(game_dir: str):
 
 
 # ── budowa komendy uruchomienia per gra ────────────────────────────────────
-def _launch_for(game: dict, creator: ShortcutCreator) -> dict | None:
-    """Zwraca {"kind": "lnk"|"url"|"copy", "target","args","url","work_dir","src"}."""
+def _launch_for(game: dict, creator: ShortcutCreator, cfg: dict = None) -> dict | None:
+    """Zwraca {"kind": "lnk"|"url"|"copy", "target","args","url","work_dir","src"}.
+
+    Gry PC mogą iść przez Special K (ustawienie `pc_launch_mode`): wtedy skrót
+    uruchamia SKIF-a z plikiem gry zamiast gry wprost. Gdy się nie da (brak
+    SKIF-a albo nie wiadomo, który .exe uruchomić), robimy zwykły skrót —
+    lepszy działający link niż żaden."""
     src = game.get("source", "")
+    if cfg and src in ("steam", "gog", "epic", "extra"):
+        from pylinks.services import specialk as _sk
+        if _sk.mode(cfg) == _sk.MODE_SPECIALK:
+            sk = _sk.launch_for(cfg, game)
+            if sk:
+                return sk
     if src == "steam":
         appid = game.get("appid")
         if not appid:
@@ -357,12 +368,46 @@ def _platform_dir(game: dict) -> str:
 
 
 # ── orkiestracja ───────────────────────────────────────────────────────────
+def ensure_covers(games: list[dict], cache_dir: Path, fetch_cover,
+                  workers: int = 6) -> int:
+    """Dociąga okładki, których brak w cache — RÓWNOLEGLE, przed pieczeniem ikon.
+
+    Ikona powstaje z okładki na dysku. Bez tego kroku gra, której okładki nie
+    ma (skasowany cache, gra dodana po pobraniu), dostawała skrót bez ikony,
+    choć grafika była wybrana. fetch_cover(key, game) -> bool. Zwraca liczbę
+    pobranych.
+    """
+    if not fetch_cover:
+        return 0
+    from concurrent.futures import ThreadPoolExecutor
+    from pylinks.api import _game_key
+    todo = []
+    for g in games:
+        k = _game_key(g)
+        if not _art.has_cover(cache_dir, k, "icon"):
+            todo.append((k, g))
+    if not todo:
+        return 0
+
+    def _one(kg):
+        try:
+            return bool(fetch_cover(*kg))
+        except Exception:
+            return False
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        return sum(ex.map(_one, todo))
+
+
 def export_games(cfg: dict, games: list[dict], cache_dir: Path,
-                 links_dir: Path, crop_of=None, progress=None) -> dict:
+                 links_dir: Path, crop_of=None, progress=None,
+                 fetch_cover=None) -> dict:
     """Tworzy skróty + ikony dla listy gier. Zwraca podsumowanie.
 
     crop_of(key) -> (fit, offset)  [opcjonalne; domyślnie z config].
+    fetch_cover(key, game) -> bool [opcjonalne] — dociąga brakującą okładkę
+    przed pieczeniem ikony (patrz `ensure_covers`).
     """
+    fetched = ensure_covers(games, cache_dir, fetch_cover)
     steam_exe = (cfg.get("steam_exe") or "").strip()
     creator = ShortcutCreator(steam_exe)
     icons_dir = Path(cache_dir) / "icons"
@@ -401,7 +446,10 @@ def export_games(cfg: dict, games: list[dict], cache_dir: Path,
                                       for x in games if _platform_dir(x) == plat}
         name = sortable_stem(name, _sibs[plat])
 
-        launch = _launch_for(g, creator)
+        # cfg → tryb uruchamiania gier PC (zwykły / Special K). Eksport do
+        # BIBLIOTEKI STEAM świadomie go nie bierze: tam wpis ma uruchamiać grę
+        # tak jak Steam, a nie przez cudzy launcher.
+        launch = _launch_for(g, creator, cfg)
         if not launch:
             failed.append(g.get("name", "")); continue
 
@@ -440,6 +488,7 @@ def export_games(cfg: dict, games: list[dict], cache_dir: Path,
                 pass
 
     return {"ok": True, "created": done, "no_icon": no_icon,
+            "covers_fetched": fetched,
             "failed": failed, "total": total,
             "win32com": WIN32COM}
 

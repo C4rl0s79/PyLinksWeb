@@ -99,6 +99,7 @@ SECRET_PATHS = [
     ("extra_sources", "ss_devpassword"),
     ("extra_sources", "ss_user"),
     ("extra_sources", "ss_password"),
+    ("extra_sources", "em_pass"),      # hasło EmuMovies — jak reszta sekretów
 ]
 
 
@@ -784,7 +785,9 @@ class Api:
                  if _game_key(g) in want]
         if not games:
             return {"ok": False, "reason": "brak gier"}
-        return _se.export_to_steam(_load_config(), games, CACHE_DIR)
+        cfg = _load_config()
+        return _se.export_to_steam(cfg, games, CACHE_DIR,
+                                   fetch_cover=self._cover_fetcher(cfg))
 
     def steam_cleanup(self, dry_run: bool = True) -> dict:
         """Usuwa z biblioteki Steam wpisy dublujące gry, które Steam już ma.
@@ -1206,7 +1209,9 @@ class Api:
         from pylinks.services import export as _exp
         if not games:
             return {"ok": False, "reason": "brak gier do eksportu", "created": 0}
-        res = _exp.export_games(_load_config(), games, CACHE_DIR, LINKS_DIR)
+        cfg = _load_config()
+        res = _exp.export_games(cfg, games, CACHE_DIR, LINKS_DIR,
+                                fetch_cover=self._cover_fetcher(cfg))
         _ICON_URI_CACHE.clear()          # świeże ikony w widoku LINKS po eksporcie
         res["links_dir"] = str(LINKS_DIR)
         return res
@@ -1499,6 +1504,31 @@ class Api:
                 out[k] = ({"uri": uri, "fit": fit, "offset": off} if uri else None)
         return out
 
+    def _fetch_one_cover(self, k: str, g: dict, cfg: dict, mode: str = "icon"):
+        """Pobiera okładkę jednej gry: zapisany wybór → źródła. True/False/None (błąd).
+
+        JEDNA droga dla siatki i dla tworzenia skrótów — eksport ma dostać
+        dokładnie tę grafikę, którą użytkownik wybrał, a nie inną.
+        """
+        try:
+            pp = (g.get("source") == "rom" and mode != "steam"
+                  and bool(cfg.get("icon_platform_spine", False)))
+            override = self._pending.get(k) or self._title_override(k, cfg)
+            if not art.has_cover(CACHE_DIR, k, mode):
+                self._restore_by_source_id(cfg, k, g, art._mode(mode))
+            r = art.fetch_cover(cfg, CACHE_DIR, k, g, mode, pp, query=override)
+            if (r or {}).get("found"):
+                self._invalidate(k)
+                self._forget_miss(k, mode)
+                return True
+            return False
+        except Exception:
+            return None
+
+    def _cover_fetcher(self, cfg: dict):
+        """Dla eksportu skrótów: (klucz, gra) → dociąga brakującą okładkę ikony."""
+        return lambda k, g: bool(self._fetch_one_cover(k, g, cfg, "icon"))
+
     def covers_fetch_batch(self, keys: list, mode: str = "icon") -> dict:
         """Dociąga BRAKUJĄCE okładki RÓWNOLEGLE i zapamiętuje nietrafienia.
 
@@ -1518,7 +1548,13 @@ class Api:
         for k in keys:
             if not k:
                 continue
-            uri = self._raw_uri(k, mode)
+            # Decyduje OKŁADKA na dysku — nie miniatura ani zapamiętany w RAM
+            # podgląd, które przeżywają skasowanie okładki.
+            if art.has_cover(CACHE_DIR, k, mode):
+                uri = self._raw_uri(k, mode)
+            else:
+                self._baked.pop((k, mode), None)
+                uri = None
             if uri:
                 fit, off = self._crop_for(k, cfg)
                 out[k] = {"uri": uri, "fit": fit, "offset": off}
@@ -1531,19 +1567,7 @@ class Api:
             g = self._find_game(k)
             if not g:
                 return k, None
-            try:
-                pp = (g.get("source") == "rom" and mode != "steam"
-                      and bool(cfg.get("icon_platform_spine", False)))
-                override = self._pending.get(k) or self._title_override(k, cfg)
-                if not art.has_cover(CACHE_DIR, k, mode):
-                    self._restore_by_source_id(cfg, k, g, art._mode(mode))
-                r = art.fetch_cover(cfg, CACHE_DIR, k, g, mode, pp, query=override)
-                if (r or {}).get("found"):
-                    self._invalidate(k)
-                    return k, True
-                return k, False
-            except Exception:
-                return k, None
+            return k, self._fetch_one_cover(k, g, cfg, mode)
 
         found = missed = 0
         if todo:
@@ -1641,6 +1665,225 @@ class Api:
             res["fit"], res["offset"] = fit, off
         return res
 
+    # --- LaunchBox Games DB (lokalny indeks, grafiki pobierane na żądanie) ---
+    def launchbox_status(self) -> dict:
+        from pylinks.services import launchbox as _lb
+        return _lb.status(CACHE_DIR)
+
+    def launchbox_update(self) -> dict:
+        """Pobiera bazę LaunchBoksa (ok. 108 MB) i buduje indeks — w tle."""
+        import threading
+        from pylinks.services import launchbox as _lb
+        from pylinks.core import log as _log
+        if self._job_busy():
+            return {"started": False, "reason": "zadanie już trwa"}
+        self._job_reset("launchbox", 0)
+
+        def _worker():
+            def _p(done, total, msg):
+                self._job["done"] = done
+                self._job["total"] = total
+                self._job["current"] = msg
+            try:
+                res = _lb.update(CACHE_DIR, progress=_p,
+                                 cancel=lambda: self._job.get("cancel"))
+                _log.write("launchbox", f"baza: {res}")
+            except InterruptedError:
+                res = {"error": "przerwano"}
+            except Exception as ex:
+                res = {"error": str(ex)}
+            self._job["running"] = False
+            self._job["current"] = ""
+            self._job["result"] = dict(res, kind="launchbox")
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return {"started": True}
+
+    # --- Special K: tryb uruchamiania gier PC ---
+    def specialk_status(self) -> dict:
+        """Tryb skrótów PC + czy SKIF jest zainstalowany i dla ilu gier zadziała."""
+        from pylinks.services import specialk as _sk
+        return _sk.status(_load_config(), list(self._pc_games) or None)
+
+    def specialk_game(self, key: str) -> dict:
+        """Czy TA gra jest wyłączona z Special K (i czy w ogóle jest w trybie)."""
+        from pylinks.services import specialk as _sk
+        cfg = _load_config()
+        return {"excluded": key in _sk.skipped(cfg), "mode": _sk.mode(cfg)}
+
+    def specialk_set_game(self, key: str, excluded: bool = True) -> dict:
+        """Wyłącza/włącza Special K dla JEDNEJ gry i od razu odbudowuje jej skrót.
+
+        Potrzebne w grach sieciowych: anty-cheat traktuje wstrzykniętą bibliotekę
+        jak oszustwo. Wyjątek jest trwały — obowiązuje też przy kolejnych
+        eksportach skrótów, nie tylko przy przełączaniu trybu."""
+        from pylinks.services import specialk as _sk
+        from pylinks.services import export as _exp
+        from pylinks.core import log as _log
+        cfg = _load_config()
+        lista = sorted(_sk.skipped(cfg) | {key} if excluded
+                       else _sk.skipped(cfg) - {key})
+        self.save_config({"specialk_skip": lista})
+        cfg = _load_config()
+        gra = next((g for g in self._pc_games if _game_key(g) == key), None)
+        if gra is None:
+            return {"ok": True, "excluded": excluded, "rebuilt": 0,
+                    "reason": "gra spoza listy PC — zapisano samo ustawienie"}
+        res = _exp.export_games(cfg, [gra], CACHE_DIR, LINKS_DIR,
+                                crop_of=lambda k: self._crop_for(k, cfg),
+                                fetch_cover=self._cover_fetcher(cfg))
+        _log.write("links", f"Special K dla {gra.get('name','')}: "
+                            f"{'WYŁĄCZONY' if excluded else 'włączony'}")
+        return {"ok": True, "excluded": excluded, "rebuilt": res.get("created", 0),
+                "name": gra.get("name", "")}
+
+    def specialk_set_mode(self, mode: str) -> dict:
+        """Przełącza skróty PC: zwykłe ↔ przez Special K. Przebudowuje je w tle.
+
+        Przebudowa idzie tą samą drogą co „Utwórz skróty", więc ikony, kadr
+        i grzbiety zostają bez zmian — zmienia się tylko to, CO skrót uruchamia.
+        Skróty z poprzedniego trybu o innym rozszerzeniu (.url ↔ .lnk) są
+        usuwane, żeby nie zostały dwa wpisy dla jednej gry."""
+        import threading
+        from pylinks.services import specialk as _sk
+        from pylinks.services import export as _exp
+        from pylinks.core import log as _log
+        from pylinks.core.naming import safe_name
+        tryb = _sk.MODE_SPECIALK if mode == _sk.MODE_SPECIALK else _sk.MODE_NORMAL
+        if self._job_busy():
+            return {"started": False, "reason": "zadanie już trwa"}
+        if not self._pc_games:
+            return {"started": False, "reason": "brak gier PC — najpierw skan"}
+        cfg = _load_config()
+        if tryb == _sk.MODE_SPECIALK and not _sk.find_skif(cfg):
+            return {"started": False,
+                    "reason": "nie znalazłem SKIF.exe (Special K) — wskaż go w Ustawieniach"}
+        self.save_config({"pc_launch_mode": tryb})
+        cfg = _load_config()
+        gry = list(self._pc_games)
+        self._job_reset("specialk", len(gry))
+
+        def _worker():
+            def _p(i, tot, name):
+                self._job["total"] = max(1, tot)
+                self._job["done"] = i
+                self._job["current"] = name
+            try:
+                przed = {p.name for p in (LINKS_DIR / "PC").glob("*")
+                         if p.suffix.lower() in _LINK_EXTS} \
+                    if (LINKS_DIR / "PC").is_dir() else set()
+                res = _exp.export_games(cfg, gry, CACHE_DIR, LINKS_DIR,
+                                        crop_of=lambda k: self._crop_for(k, cfg),
+                                        progress=_p,
+                                        fetch_cover=self._cover_fetcher(cfg))
+                # po zmianie trybu gra może mieć skrót w DRUGIM formacie
+                # (steam:// jako .url ↔ SKIF jako .lnk) — stary usuwamy
+                teraz = {p.name for p in (LINKS_DIR / "PC").glob("*")
+                         if p.suffix.lower() in _LINK_EXTS}
+                usuniete = 0
+                for nazwa in przed:
+                    p = LINKS_DIR / "PC" / nazwa
+                    stem, suf = Path(nazwa).stem, Path(nazwa).suffix.lower()
+                    inne = [x for x in teraz
+                            if Path(x).stem == stem and Path(x).suffix.lower() != suf]
+                    if inne and p.is_file():
+                        try:
+                            p.unlink()
+                            usuniete += 1
+                        except OSError:
+                            pass
+                res = dict(res, mode=tryb, removed=usuniete)
+                _log.write("links", f"tryb skrótów PC: {tryb} — {res}")
+            except Exception as ex:
+                res = {"error": str(ex)}
+            self._job["running"] = False
+            self._job["current"] = ""
+            self._job["result"] = dict(res, kind="specialk")
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return {"started": True, "total": len(gry), "mode": tryb}
+
+    # --- EmuMovies (konto abonenta, FTP) ---
+    def emumovies_test(self) -> dict:
+        from pylinks.services import emumovies as _em
+        return _em.test(_load_config())
+
+    def emumovies_status(self) -> dict:
+        from pylinks.services import emumovies as _em
+        return _em.status(CACHE_DIR)
+
+    def emumovies_index(self, systems: list = None) -> dict:
+        """Spisuje pliki EmuMovies dla moich platform — w tle (FTP jest wolny)."""
+        import threading
+        from pylinks.services import emumovies as _em
+        from pylinks.core import log as _log
+        if self._job_busy():
+            return {"started": False, "reason": "zadanie już trwa"}
+        cfg = _load_config()
+        if not _em.enabled(cfg):
+            return {"started": False, "reason": "włącz EmuMovies i podaj login/hasło"}
+        plats = [s for s in (systems or []) if s]
+        if not plats:
+            # moje platformy: systemy ROM z ustawień + arcade
+            plats = [x.get("name", "") for x in
+                     ((cfg.get("rom_support", {}) or {}).get("systems") or [])
+                     if x.get("name")]
+            if (cfg.get("arcade_library", {}) or {}).get("enabled") and "MAME" not in plats:
+                plats.append("MAME")
+        if not plats:
+            return {"started": False, "reason": "brak platform (najpierw skan/ustawienia)"}
+        self._job_reset("emumovies", len(plats))
+
+        def _worker():
+            def _p(done, total, msg):
+                self._job["done"] = done
+                self._job["total"] = total
+                self._job["current"] = msg
+            try:
+                res = _em.index_systems(cfg, CACHE_DIR, plats, progress=_p,
+                                        cancel=lambda: self._job.get("cancel"))
+                _log.write("emumovies", f"indeks: {res}")
+            except InterruptedError:
+                res = {"error": "przerwano"}
+            except Exception as ex:
+                res = {"error": str(ex)}
+            self._job["running"] = False
+            self._job["current"] = ""
+            self._job["result"] = dict(res, kind="emumovies")
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return {"started": True, "total": len(plats), "systems": plats}
+
+    def _emumovies_candidates(self, cfg: dict, g: dict, query: str) -> list:
+        from pylinks.services import emumovies as _em
+        if not _em.enabled(cfg):
+            return []
+        src = g.get("source", "")
+        system = g.get("system", "") if src == "rom" else ("MAME" if src == "mame" else "PC")
+        tytul = (query or "").strip() or g.get("name", "")
+        zestaw = str(g.get("set") or "") if src == "mame" and not query else ""
+        base = _thumbsrv.base_url() or _thumbsrv.start(CACHE_DIR)
+        try:
+            return _em.candidates(CACHE_DIR, system, tytul, mame_set=zestaw,
+                                  base_url=base)
+        except Exception:
+            return []
+
+    def _launchbox_candidates(self, cfg: dict, g: dict, query: str) -> list:
+        """Kandydaci z LaunchBoksa dla gry (ROM / arcade / PC)."""
+        if (cfg.get("extra_sources", {}) or {}).get("launchbox", True) is False:
+            return []
+        from pylinks.services import launchbox as _lb
+        src = g.get("source", "")
+        system = g.get("system", "") if src == "rom" else ("MAME" if src == "mame" else "PC")
+        tytul = (query or "").strip() or g.get("name", "")
+        # automaty: most przez nazwę zestawu (Mame.xml) — tytuł z MAME bywa inny
+        zestaw = str(g.get("set") or "") if src == "mame" and not query else ""
+        try:
+            return _lb.candidates(CACHE_DIR, system, tytul, mame_set=zestaw)
+        except Exception:
+            return []
+
     def _all_candidates(self, cfg: dict, g: dict, query: str, mode: str,
                         page: int = 0) -> list:
         """SteamGridDB + źródła dodatkowe (IGDB / TGDB / SteamCDN / Libretro).
@@ -1673,6 +1916,11 @@ class Api:
                         cands += [c for c in libretro_candidates(g.get("system", ""),
                                                                  szukaj)
                                   if c.get("id") not in seen]
+                # LaunchBox — niezależnie od źródła gry (ROM, arcade, PC)
+                cands += [c for c in self._launchbox_candidates(cfg, g, query)
+                          if c.get("id") not in seen]
+                cands += [c for c in self._emumovies_candidates(cfg, g, query)
+                          if c.get("id") not in seen]
                 if g.get("source") != "rom" or query:
                     from pylinks.services.extra_art import ExtraArtSources
                     # appid podpinamy tylko przy szukaniu po nazwie własnej gry —
@@ -1984,8 +2232,10 @@ class Api:
                     self._job["done"] = base + i
                     self._job["current"] = name
                 try:
+                    self._job["current"] = "pobieranie brakujących okładek…"
                     res = _exp.export_games(cfg_snap, games_snapshot, CACHE_DIR,
-                                            LINKS_DIR, progress=_p)
+                                            LINKS_DIR, progress=_p,
+                                            fetch_cover=self._cover_fetcher(cfg_snap))
                     summary["links"] = res
                 except Exception as ex:
                     summary["links_error"] = str(ex)
@@ -2000,7 +2250,8 @@ class Api:
                     self._job["current"] = name
                 try:
                     res = _se.export_to_steam(cfg_snap, games_snapshot, CACHE_DIR,
-                                              progress=_ps)
+                                              progress=_ps,
+                                              fetch_cover=self._cover_fetcher(cfg_snap))
                     summary["steam"] = res
                 except Exception as ex:
                     summary["steam_error"] = str(ex)
@@ -2586,7 +2837,9 @@ class Api:
         return {"sgdb": self.test_sgdb(), "steam": self.test_steam_api(),
                 "igdb": self.test_igdb(), "tgdb": self.test_tgdb(),
                 "screenscraper": self.test_screenscraper(),
-                "libretro": self.test_libretro(), "logos": self.test_logos_repo()}
+                "libretro": self.test_libretro(), "logos": self.test_logos_repo(),
+                "launchbox": self.launchbox_status(),
+                "emumovies": self.emumovies_status()}
 
     def test_screenscraper(self) -> dict:
         """ScreenScraper.fr — wymaga danych DEWELOPERA, nie tylko konta usera."""

@@ -542,3 +542,16 @@ code{background:var(--bg3);padding:1px 5px;border-radius:5px;font-size:12px}
 #catFilter{ width: 200px; }
 /* podkategorie w panelu bocznym */
 .plat-item.sub{ padding-left: 26px; font-size: 12px; }
+
+/* przełącznik w stanie WŁĄCZONY (np. „Special K") — widać go z daleka */
+.btn.on{ background: #2d6a4f; border-color: #40916c; color: #eafff4; }
+
+/* znacznik „uruchamiaj przez Special K" na kafelku (widok LINKS/PC) */
+.card .skchk{
+  position:absolute; top:6px; left:6px; z-index:4; width:22px; height:22px;
+  border-radius:5px; border:2px solid rgba(255,255,255,.45); background:rgba(17,17,27,.6);
+  cursor:pointer; display:flex; align-items:center; justify-content:center;
+  font-size:12px; line-height:1; color:#6b7280;
+}
+.card .skchk input{ position:absolute; opacity:0; width:0; height:0; }
+.card .skchk:has(input:checked){ background:#b45309; border-color:#f59e0b; color:#fff7ed; }
